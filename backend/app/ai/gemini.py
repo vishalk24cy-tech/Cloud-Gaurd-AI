@@ -92,3 +92,16 @@ AWS Findings:
             "recommendations": [],
             "error": str(e)
         }
+
+
+def generate_raw_text(prompt: str) -> str:
+    """
+    Generate raw text from Gemini with lazy client resolution.
+    Exceptions are propagated to allow callers to categorize timeouts, auth errors, and missing keys.
+    """
+    client = _get_client()
+    response = client.models.generate_content(
+        model="gemini-3.6-flash",
+        contents=prompt,
+    )
+    return getattr(response, "text", "") or ""

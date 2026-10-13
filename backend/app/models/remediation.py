@@ -125,6 +125,37 @@ def _clean(value):
     return value
 
 
+def _extract_remediation_metadata(raw_metadata):
+    """
+    Extract and validate allowlisted remediation metadata (e.g. AI rationale/confidence).
+    Untrusted or unallowlisted keys are rejected.
+    """
+    if not isinstance(raw_metadata, dict):
+        return {}
+
+    allowed_keys = {
+        "confidence",
+        "rationale",
+        "risk_notes",
+        "model",
+        "prompt_version",
+        "suggested_action_id",
+    }
+
+    extracted = {}
+    for key in allowed_keys:
+        if key in raw_metadata:
+            val = raw_metadata[key]
+            if key == "confidence" and isinstance(val, (int, float)) and not isinstance(val, bool):
+                extracted[key] = float(val)
+            elif isinstance(val, str):
+                extracted[key] = val.strip()
+            elif val is None:
+                extracted[key] = None
+
+    return extracted
+
+
 def _serialize(value):
     """
     Convert MongoDB values into JSON-safe values.
@@ -458,6 +489,18 @@ def create_remediation(data):
 
         "created_at": now,
         "updated_at": now,
+
+        # ----------------------------------------------------
+        # Proposal Source & Allowlisted Metadata
+        # ----------------------------------------------------
+
+        "source": (
+            str(data.get("source")).strip().lower()
+            if data.get("source") and str(data.get("source")).strip().lower() in {"manual", "ai"}
+            else "manual"
+        ),
+
+        "metadata": _extract_remediation_metadata(data.get("metadata")),
     }
 
     result = remediations_collection.insert_one(

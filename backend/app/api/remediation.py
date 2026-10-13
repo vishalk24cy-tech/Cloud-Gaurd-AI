@@ -101,6 +101,16 @@ from app.services.remediation.cloudtrail_execution import (
     execute_cloudtrail_enable_logging,
     is_valid_trail_name,
 )
+from app.services.ai_remediation_proposer import (
+    AIRemediationAuthorizationError,
+    AIRemediationConfidenceError,
+    AIRemediationConflictError,
+    AIRemediationIncompatibleError,
+    AIRemediationNotFoundError,
+    AIRemediationServiceError,
+    AIRemediationValidationError,
+    propose_ai_remediation,
+)
 
 
 # ============================================================
@@ -202,6 +212,10 @@ class CreateRemediationActionRequest(BaseModel):
     resource_id: Optional[str] = Field(default=None, min_length=1, max_length=500)
     username: Optional[str] = Field(default=None, min_length=1, max_length=64)
     finding_id: Optional[str] = Field(default=None, min_length=1, max_length=200)
+
+
+class CreateAIRemediationProposalRequest(BaseModel):
+    finding_id: str = Field(..., min_length=1, max_length=200)
 
 
 class ExecuteRemediationRequest(BaseModel):
@@ -1733,6 +1747,91 @@ def create_remediation_action_proposal(
         "audit_recorded": bool(audit_record),
         "remediation": _safe_remediation_response(remediation),
     }
+
+
+# ============================================================
+# AI REMEDIATION PROPOSALS
+# ============================================================
+
+@router.post("/ai-proposals", status_code=status.HTTP_201_CREATED)
+def create_ai_remediation_proposal_endpoint(
+    payload: CreateAIRemediationProposalRequest,
+    request: Request,
+    current_user=Depends(verify_token),
+):
+    """
+    Generate an AI remediation proposal for an actionable tenant finding.
+    Strictly gates model recommendations through deterministic validation,
+    registry checks, RBAC authorization, and deduplication.
+    Never executes or approves changes automatically.
+    """
+    user_id = _get_user_id(current_user)
+    organization_id, role = _get_organization_context_from_user(current_user)
+    finding_id = _clean_text(payload.finding_id)
+    request_id = getattr(request.state, "request_id", None) if hasattr(request, "state") else None
+
+    try:
+        result = propose_ai_remediation(
+            finding_id=finding_id,
+            user_id=user_id,
+            organization_id=organization_id,
+            role=role,
+            request_id=request_id,
+        )
+    except AIRemediationNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from None
+    except AIRemediationAuthorizationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        ) from None
+    except AIRemediationConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from None
+    except (AIRemediationValidationError, AIRemediationConfidenceError, AIRemediationIncompatibleError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from None
+    except AIRemediationServiceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from None
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unexpected error occurred while generating AI proposal",
+        ) from None
+
+    # Handle no-action scenario: return 200 OK
+    if result.get("status") == "no_action":
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content=result,
+        )
+
+    # Handle deduplicated proposal: return 200 OK
+    if result.get("deduplicated"):
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                **result,
+                "remediation": _safe_remediation_response(result.get("remediation")),
+            },
+        )
+
+    # Accepted new proposal: return 201 Created
+    return {
+        **result,
+        "remediation": _safe_remediation_response(result.get("remediation")),
+    }
+
 
 @router.get("/actions")
 def list_remediation_actions(

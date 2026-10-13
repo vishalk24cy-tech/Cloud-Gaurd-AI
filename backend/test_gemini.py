@@ -1,3 +1,7 @@
+# Manual smoke script for the live Gemini API.
+# It is NOT an automated test: run it yourself with
+#   python test_gemini.py
+# so that pytest never makes a real (billable) API call.
 from app.ai.gemini import ask_gemini
 
 prompt = """
@@ -13,4 +17,5 @@ Provide:
 6. Best Practices
 """
 
-print(ask_gemini(prompt))
+if __name__ == "__main__":
+    print(ask_gemini(prompt))

@@ -3,11 +3,30 @@ import json
 from dotenv import load_dotenv
 from google import genai
 
-load_dotenv()
+if os.getenv("APP_ENV", "").strip().lower() != "test":
+    load_dotenv()
 
-client = genai.Client(
-    api_key=os.getenv("GEMINI_API_KEY")
-)
+_client = None
+
+
+def _get_client():
+    """
+    Create the Gemini client on first use, not at import time, so a
+    missing GEMINI_API_KEY cannot crash the whole application.
+    """
+
+    global _client
+
+    if _client is None:
+
+        api_key = os.getenv("GEMINI_API_KEY")
+
+        if not api_key:
+            raise RuntimeError("GEMINI_API_KEY is not configured")
+
+        _client = genai.Client(api_key=api_key)
+
+    return _client
 
 
 def ask_gemini(findings):
@@ -48,7 +67,7 @@ AWS Findings:
 
     try:
 
-        response = client.models.generate_content(
+        response = _get_client().models.generate_content(
             model="gemini-3.6-flash",
             contents=prompt
         )

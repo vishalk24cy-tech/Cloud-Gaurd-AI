@@ -8,7 +8,7 @@ import hashlib
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends, Query, Request
 from botocore.exceptions import BotoCoreError, ClientError
 
 from app.services.aws_analyzer import analyze
@@ -993,7 +993,7 @@ def control_ec2_instance(
     account_id: str,
     instance_id: str,
     payload: EC2ActionRequest,
-    request: Optional[Request] = None,
+    request: Request = None,
     current_user=Depends(verify_token),
 ):
     """

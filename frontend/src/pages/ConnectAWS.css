@@ -1,0 +1,172 @@
+/* ============================================
+   Connect AWS Page
+============================================ */
+
+.connect-page {
+  min-height: 80vh;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 40px 20px;
+  animation: fadeSlideUp 0.5s var(--ease-out) both;
+}
+
+.connect-card {
+  width: 100%;
+  max-width: 650px;
+  background: var(--bg-card);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-2xl);
+  padding: 40px 36px;
+  box-shadow: var(--shadow-lg);
+}
+
+.connect-card h1 {
+  font-size: 24px;
+  font-weight: 800;
+  color: var(--text-bright);
+  letter-spacing: -0.02em;
+  margin-bottom: 8px;
+}
+
+.connect-card > p {
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.6;
+  margin-bottom: 28px;
+}
+
+.connect-card form {
+  display: flex;
+  flex-direction: column;
+}
+
+.connect-card label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+}
+
+.connect-card input,
+.connect-card select {
+  padding: 12px 16px;
+  margin-bottom: 20px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  color: var(--text-bright);
+  font-size: 14px;
+  transition: all var(--duration) ease;
+}
+
+.connect-card input:focus,
+.connect-card select:focus {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+}
+
+.connect-card button {
+  padding: 14px;
+  background: var(--accent-primary);
+  color: white;
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all var(--duration) var(--ease-out);
+  margin-top: 8px;
+}
+
+.connect-card button:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(59, 130, 246, 0.4);
+}
+
+.connect-card button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.success-box {
+  background: rgba(6, 214, 160, 0.12);
+  border: 1px solid rgba(6, 214, 160, 0.25);
+  color: var(--accent-bright);
+  padding: 12px 18px;
+  border-radius: var(--radius-md);
+  margin-bottom: 20px;
+  font-weight: 600;
+  font-size: 13px;
+  animation: slideDown 0.3s ease both;
+}
+
+.error-box {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  color: var(--accent-crimson);
+  padding: 12px 18px;
+  border-radius: var(--radius-md);
+  margin-bottom: 20px;
+  font-weight: 600;
+  font-size: 13px;
+  animation: slideDown 0.3s ease both;
+}
+
+@media (max-width: 768px) {
+  .connect-card {
+    padding: 24px;
+  }
+}
+
+/* Phase 4 cloud scan console */
+.connect-page {
+  min-height: calc(100vh - 72px);
+  align-items: flex-start;
+  justify-content: center;
+  padding: 34px 0 44px;
+  background:
+    linear-gradient(90deg, rgba(16, 185, 129, 0.035) 1px, transparent 1px),
+    linear-gradient(rgba(16, 185, 129, 0.025) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+.connect-card {
+  max-width: 860px;
+  padding: 26px;
+  border-radius: 12px;
+  background: rgba(17, 27, 24, 0.94);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.22);
+}
+
+.connect-card h1 {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 7px;
+  font-size: 22px;
+}
+
+.connect-card h1 svg { color: var(--accent-bright); }
+.connect-card > p { max-width: 620px; margin-bottom: 24px; }
+.connect-card form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 14px; }
+.connect-card form label { margin-top: 2px; }
+.connect-card form input, .connect-card form select { margin-bottom: 14px; }
+.connect-card form label:nth-of-type(3), .connect-card form input[name="role_arn"],
+.connect-card form button { grid-column: 1 / -1; }
+.connect-card input, .connect-card select { border-radius: 8px; background: var(--bg-deep); }
+.connect-card input:focus, .connect-card select:focus { box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.12); }
+.connect-card button { border-radius: 8px; background: var(--accent-primary); color: #03150f; box-shadow: none; }
+.connect-card button:hover:not(:disabled) { box-shadow: 0 8px 20px rgba(16, 185, 129, 0.18); }
+.success-box { background: rgba(16, 185, 129, 0.08); border-color: rgba(16, 185, 129, 0.22); color: var(--accent-bright); }
+.error-box { background: rgba(239, 68, 68, 0.08); color: #fca5a5; }
+
+@media (max-width: 620px) {
+  .connect-page { padding: 18px 0 30px; }
+  .connect-card { padding: 20px; }
+  .connect-card form { grid-template-columns: 1fr; }
+  .connect-card form label:nth-of-type(3), .connect-card form input[name="role_arn"], .connect-card form button { grid-column: auto; }
+}

@@ -1,0 +1,75 @@
+/* ============================================
+   Risk Chart (Severity Distribution)
+============================================ */
+
+.chart-card {
+  background: var(--bg-card);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-2xl);
+  padding: 24px 28px;
+  box-shadow: var(--shadow-md);
+  transition: all var(--duration) ease;
+}
+
+.chart-card:hover {
+  border-color: var(--border-hover);
+}
+
+.chart-header {
+  margin-bottom: 20px;
+}
+
+.chart-header h2 {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-bright);
+  letter-spacing: -0.01em;
+}
+
+.chart-header p {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.severity-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.severity-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  transition: all var(--duration) ease;
+}
+
+.severity-card:hover {
+  transform: translateY(-2px);
+  background: var(--bg-glass-hover);
+}
+
+.severity-card p {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.severity-card h3 {
+  font-size: 20px;
+  font-weight: 800;
+  margin-top: 4px;
+}
+
+@media (max-width: 600px) {
+  .severity-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}

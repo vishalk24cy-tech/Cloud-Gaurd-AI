@@ -1,0 +1,135 @@
+/* ============================================
+   Scan Progress Modal Component
+============================================ */
+
+.scan-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(6, 9, 15, 0.85);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+  padding: 20px;
+  animation: fadeIn 0.3s var(--ease-out) both;
+}
+
+.scan-modal {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-2xl);
+  padding: 36px 32px;
+  max-width: 520px;
+  width: 100%;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.7), 0 0 40px rgba(59, 130, 246, 0.1);
+  animation: scaleIn 0.35s var(--ease-spring) both;
+  text-align: center;
+}
+
+.scan-modal h2 {
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--text-bright);
+  letter-spacing: -0.02em;
+}
+
+.scan-modal p {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin-top: 6px;
+  margin-bottom: 24px;
+}
+
+.progress-bar {
+  height: 8px;
+  background: rgba(148, 163, 184, 0.1);
+  border-radius: 999px;
+  overflow: hidden;
+  position: relative;
+}
+
+.progress-bar .progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent-primary), var(--accent-bright));
+  border-radius: 999px;
+  transition: width 0.15s ease;
+  box-shadow: 0 0 14px var(--accent-primary);
+}
+
+.progress-text {
+  margin-top: 10px;
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--accent-bright);
+  font-family: monospace;
+}
+
+.scan-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 24px 0;
+  text-align: left;
+}
+
+.scan-step {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  font-size: 13px;
+  color: var(--text-muted);
+  transition: all var(--duration) ease;
+}
+
+.scan-step.active {
+  background: rgba(59, 130, 246, 0.1);
+  border-color: rgba(59, 130, 246, 0.3);
+  color: var(--text-bright);
+  font-weight: 600;
+}
+
+.scan-step.completed {
+  color: var(--accent-bright);
+}
+
+.step-icon {
+  width: 20px;
+  text-align: center;
+  font-weight: 800;
+}
+
+.scan-success {
+  margin-top: 20px;
+  animation: slideUp 0.4s var(--ease-out) both;
+}
+
+.scan-success h3 {
+  font-size: 18px;
+  color: var(--accent-bright);
+  font-weight: 800;
+}
+
+.scan-success p {
+  margin-bottom: 16px;
+}
+
+.close-btn {
+  padding: 12px 28px;
+  background: linear-gradient(135deg, var(--accent-primary), #059669);
+  color: #06090f;
+  font-weight: 800;
+  font-size: 14px;
+  border-radius: var(--radius-md);
+  transition: all var(--duration) ease;
+}
+
+.close-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(6, 214, 160, 0.4);
+}

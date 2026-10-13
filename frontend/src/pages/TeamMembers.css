@@ -1,0 +1,59 @@
+.team-members-phase5 {
+  color: var(--text-primary);
+  min-height: 100%;
+  padding: 28px 0 42px !important;
+  background: var(--bg-deep) !important;
+}
+
+.team-members-phase5 button,
+.team-members-phase5 select,
+.team-members-phase5 input {
+  font-family: inherit;
+}
+
+.team-members-phase5 [style*="background: linear-gradient"],
+.team-members-phase5 > div {
+  max-width: 1680px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.team-members-phase5 [style*="background: #ffffff"],
+.team-members-phase5 [style*="background: rgb(255"] {
+  background: var(--bg-card) !important;
+  border-color: var(--border-default) !important;
+}
+
+.team-members-phase5 h1,
+.team-members-phase5 h2,
+.team-members-phase5 h3,
+.team-members-phase5 strong { color: var(--text-bright) !important; }
+.team-members-phase5 p,
+.team-members-phase5 span { color: var(--text-muted); }
+.team-members-phase5 button { border-radius: 8px !important; }
+.team-members-phase5 select,
+.team-members-phase5 input { background: var(--bg-deep) !important; border-color: var(--border-default) !important; color: var(--text-primary) !important; }
+.team-members-phase5 [style*="#f8fafc"],
+.team-members-phase5 [style*="#eef2ff"] { background: var(--bg-elevated) !important; border-color: var(--border-subtle) !important; }
+.team-members-phase5 table { color: var(--text-primary); }
+.team-members-phase5 th { color: var(--text-muted) !important; }
+.team-members-phase5 td { border-color: var(--border-subtle) !important; }
+.team-members-phase5 tr:hover td { background: rgba(16,185,129,.035); }
+
+@media (max-width: 700px) {
+  .team-members-phase5 { padding: 20px 0 30px !important; }
+  .team-members-phase5 > div:first-child { flex-direction: column; align-items: flex-start !important; }
+  .team-members-phase5 table { min-width: 760px; }
+}
+
+/* Keep the existing inline business logic styles readable in the enterprise shell. */
+.team-members-phase5 .member-table-shell,
+.team-members-phase5 .team-section {
+  background: var(--bg-card);
+  border-color: var(--border-default);
+}
+
+@media (max-width: 700px) {
+  .team-members-phase5 { padding: 20px !important; }
+  .team-members-phase5 table { min-width: 760px; }
+}

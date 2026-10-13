@@ -1,0 +1,70 @@
+/* ============================================
+   Risk Trend Chart
+============================================ */
+
+.trend-card {
+  background: var(--bg-card);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-2xl);
+  padding: 24px 28px;
+  box-shadow: var(--shadow-md);
+  transition: all var(--duration) ease;
+}
+
+.trend-card:hover {
+  border-color: var(--border-hover);
+}
+
+.trend-header {
+  margin-bottom: 20px;
+}
+
+.trend-header h2 {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-bright);
+  letter-spacing: -0.01em;
+}
+
+.trend-header p {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.trend-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.trend-box {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  text-align: center;
+  transition: all var(--duration) ease;
+}
+
+.trend-box:hover {
+  transform: translateY(-2px);
+  background: var(--bg-glass-hover);
+}
+
+.trend-box p {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.trend-box h3 {
+  font-size: 20px;
+  font-weight: 800;
+  margin-top: 4px;
+}

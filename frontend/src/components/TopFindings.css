@@ -1,0 +1,88 @@
+/* ============================================
+   Top Findings Component
+============================================ */
+
+.topfindings-card {
+  background: var(--bg-card);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-2xl);
+  padding: 24px 28px;
+  box-shadow: var(--shadow-md);
+}
+
+.topfindings-header {
+  margin-bottom: 20px;
+}
+
+.topfindings-header h2 {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-bright);
+  letter-spacing: -0.01em;
+}
+
+.topfindings-header p {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.finding-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: 16px 18px;
+  margin-bottom: 12px;
+  transition: all var(--duration) var(--ease-out);
+}
+
+.finding-card:hover {
+  background: var(--bg-glass-hover);
+  transform: translateX(4px);
+  border-color: var(--border-hover);
+}
+
+.finding-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.finding-top h3 {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-bright);
+}
+
+.finding-desc {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin-bottom: 12px;
+}
+
+.finding-meta {
+  display: flex;
+  gap: 20px;
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 10px;
+  font-size: 12px;
+}
+
+.finding-meta > div {
+  display: flex;
+  gap: 6px;
+}
+
+.finding-meta strong {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.finding-meta span {
+  color: var(--text-primary);
+  font-weight: 500;
+}

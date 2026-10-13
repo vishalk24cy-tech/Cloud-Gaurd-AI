@@ -1,0 +1,669 @@
+/* ============================================================
+   CloudGuardAI - Remediation Governance Settings Styles
+   Phase 10: Step 4 - Frontend Settings Controls
+   ============================================================ */
+
+.remediation-gov-card {
+  margin-bottom: 22px;
+  padding: 24px 28px;
+  background: var(--bg-card, #0d1c31) !important;
+  border: 1px solid var(--border-default, #20364e) !important;
+  border-radius: 14px !important;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+  box-sizing: border-box;
+}
+
+/* ------------------------------------------------------------
+   Header
+   ------------------------------------------------------------ */
+.remediation-gov-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.remediation-gov-eyebrow {
+  margin: 0 0 6px 0;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 1.4px;
+  color: var(--accent-primary, #56e6b5) !important;
+  text-transform: uppercase;
+}
+
+.remediation-gov-title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--text-bright, #e4edf0) !important;
+  letter-spacing: -0.01em;
+}
+
+.remediation-gov-subtitle {
+  margin: 6px 0 0 0;
+  font-size: 13px;
+  color: var(--text-muted, #74899d) !important;
+  max-width: 680px;
+  line-height: 1.5;
+}
+
+.remediation-gov-header-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.remediation-gov-role-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  text-transform: capitalize;
+}
+
+.remediation-gov-role-badge.role-admin {
+  background: rgba(86, 230, 181, 0.12);
+  color: var(--accent-primary, #56e6b5);
+  border: 1px solid rgba(86, 230, 181, 0.28);
+}
+
+.remediation-gov-role-badge.role-viewer {
+  background: rgba(148, 163, 184, 0.12);
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+}
+
+.remediation-gov-select-wrapper {
+  position: relative;
+}
+
+.remediation-gov-account-select {
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border-default, #20364e);
+  background: var(--bg-surface, #0c1b30);
+  color: var(--text-primary, #e4edf0);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  min-width: 220px;
+}
+
+.remediation-gov-account-select:focus {
+  border-color: var(--accent-primary, #56e6b5);
+  box-shadow: 0 0 0 3px rgba(86, 230, 181, 0.15);
+}
+
+.remediation-gov-btn-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border-default, #20364e);
+  background: var(--bg-elevated, #11233a);
+  color: var(--text-primary, #e4edf0);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.remediation-gov-btn-refresh:hover:not(:disabled) {
+  background: var(--bg-surface, #0c1b30);
+  border-color: var(--accent-primary, #56e6b5);
+  color: var(--accent-bright, #6af0c1);
+}
+
+.remediation-gov-btn-refresh:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* ------------------------------------------------------------
+   Governance Disclosure Notice
+   ------------------------------------------------------------ */
+.remediation-gov-disclosure-box {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 16px 18px;
+  border-radius: 10px;
+  background: rgba(59, 130, 246, 0.07);
+  border: 1px solid rgba(59, 130, 246, 0.22);
+  margin-bottom: 18px;
+}
+
+.remediation-gov-disclosure-icon {
+  color: #60a5fa;
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.remediation-gov-disclosure-content {
+  font-size: 12px;
+  color: var(--text-secondary, #a8bac8);
+  line-height: 1.5;
+}
+
+.remediation-gov-disclosure-content strong {
+  color: #93c5fd !important;
+  font-size: 13px;
+  display: block;
+  margin-bottom: 4px;
+}
+
+.remediation-gov-disclosure-content p {
+  margin: 0 0 6px 0;
+  color: var(--text-secondary, #a8bac8);
+}
+
+.remediation-gov-disclosure-content ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.remediation-gov-disclosure-content li {
+  margin-bottom: 4px;
+  color: var(--text-secondary, #a8bac8);
+}
+
+.remediation-gov-disclosure-content li strong {
+  display: inline;
+  color: var(--text-primary, #e4edf0) !important;
+  font-size: 12px;
+}
+
+/* ------------------------------------------------------------
+   Viewer & Alert Banners
+   ------------------------------------------------------------ */
+.remediation-gov-viewer-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.28);
+  color: #fbbf24;
+  font-size: 12px;
+  margin-bottom: 18px;
+  line-height: 1.4;
+}
+
+.remediation-gov-viewer-banner strong {
+  color: #fde68a !important;
+}
+
+.remediation-gov-alert-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  margin-bottom: 16px;
+  box-sizing: border-box;
+}
+
+.remediation-gov-alert-banner.alert-success {
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  color: #34d399;
+}
+
+.remediation-gov-alert-banner.alert-error {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: #f87171;
+}
+
+.remediation-gov-alert-banner.alert-warning {
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  color: #fbbf24;
+}
+
+.remediation-gov-alert-dismiss {
+  background: transparent;
+  border: none;
+  color: inherit;
+  font-size: 18px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+  opacity: 0.8;
+}
+
+.remediation-gov-alert-dismiss:hover {
+  opacity: 1;
+}
+
+/* ------------------------------------------------------------
+   Status Bar
+   ------------------------------------------------------------ */
+.remediation-gov-status-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: var(--bg-surface, #0c1b30);
+  border: 1px solid var(--border-subtle, #172b41);
+  margin-bottom: 18px;
+  font-size: 12px;
+}
+
+.remediation-gov-status-left {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.remediation-gov-status-pill {
+  color: var(--text-secondary, #a8bac8);
+}
+
+.remediation-gov-status-pill strong {
+  color: var(--text-primary, #e4edf0) !important;
+}
+
+.remediation-gov-status-updated {
+  color: var(--text-muted, #74899d);
+  font-size: 11px;
+}
+
+/* ------------------------------------------------------------
+   Services Grid & Cards
+   ------------------------------------------------------------ */
+.remediation-gov-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.remediation-service-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 18px;
+  border-radius: 12px;
+  background: var(--bg-elevated, #11233a);
+  border: 1px solid var(--border-default, #20364e);
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  position: relative;
+}
+
+.remediation-service-card.service-enabled {
+  border-color: rgba(86, 230, 181, 0.32);
+  background: linear-gradient(180deg, rgba(86, 230, 181, 0.04) 0%, var(--bg-elevated, #11233a) 100%);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.2);
+}
+
+.remediation-service-card.service-disabled {
+  border-color: var(--border-subtle, #172b41);
+  opacity: 0.88;
+}
+
+.remediation-service-card.service-pending {
+  border-color: #f59e0b;
+  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.35);
+}
+
+.remediation-service-card-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.remediation-service-icon-box {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: all 0.2s ease;
+}
+
+.remediation-service-title-wrap {
+  flex: 1;
+  min-width: 0;
+}
+
+.remediation-service-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.remediation-service-name {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-bright, #e4edf0) !important;
+}
+
+.remediation-service-key-tag {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-muted, #74899d);
+  font-family: monospace;
+}
+
+.remediation-service-badge {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
+.remediation-service-badge.badge-permitted {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.remediation-service-badge.badge-blocked {
+  background: rgba(148, 163, 184, 0.1);
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+/* ------------------------------------------------------------
+   Custom Switch Toggle
+   ------------------------------------------------------------ */
+.remediation-toggle-wrapper {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.remediation-toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 24px;
+  cursor: pointer;
+}
+
+.remediation-toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+
+.remediation-toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 999px;
+  transition: background-color 0.25s ease, border-color 0.25s ease;
+}
+
+.remediation-toggle-slider:before {
+  position: absolute;
+  content: "";
+  height: 18px;
+  width: 18px;
+  left: 2px;
+  bottom: 2px;
+  background-color: #cbd5e1;
+  border-radius: 50%;
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.2s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+.remediation-toggle-switch input:checked + .remediation-toggle-slider {
+  background: #10b981;
+  border-color: #059669;
+}
+
+.remediation-toggle-switch input:checked + .remediation-toggle-slider:before {
+  transform: translateX(20px);
+  background-color: #ffffff;
+}
+
+.remediation-toggle-switch input:focus-visible + .remediation-toggle-slider {
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.3);
+}
+
+.remediation-toggle-switch.disabled,
+.remediation-toggle-switch input:disabled + .remediation-toggle-slider {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+/* ------------------------------------------------------------
+   Service Details
+   ------------------------------------------------------------ */
+.remediation-service-description {
+  margin: 0 0 14px 0;
+  font-size: 12px;
+  color: var(--text-secondary, #a8bac8);
+  line-height: 1.5;
+  min-height: 36px;
+}
+
+.remediation-service-actions-list {
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle, #172b41);
+}
+
+.remediation-service-actions-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted, #74899d);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+}
+
+.remediation-service-tags-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.remediation-service-action-pill {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--bg-surface, #0c1b30);
+  border: 1px solid var(--border-subtle, #172b41);
+  color: var(--text-primary, #e4edf0);
+}
+
+.remediation-service-pending-badge {
+  margin-top: 10px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #f59e0b;
+  text-align: right;
+}
+
+/* ------------------------------------------------------------
+   Footer & Save Controls
+   ------------------------------------------------------------ */
+.remediation-gov-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-default, #20364e);
+}
+
+.remediation-gov-footer-info {
+  font-size: 13px;
+}
+
+.remediation-gov-dirty-badge {
+  color: #f59e0b;
+  font-weight: 700;
+}
+
+.remediation-gov-synced-badge {
+  color: var(--text-muted, #74899d);
+  font-size: 12px;
+}
+
+.remediation-gov-footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.remediation-gov-btn-reset {
+  padding: 9px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border-default, #20364e);
+  background: transparent;
+  color: var(--text-secondary, #a8bac8);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.remediation-gov-btn-reset:hover:not(:disabled) {
+  background: var(--bg-elevated, #11233a);
+  color: var(--text-primary, #e4edf0);
+  border-color: #64748b;
+}
+
+.remediation-gov-btn-save {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 18px;
+  border-radius: 8px;
+  border: none;
+  background: linear-gradient(135deg, var(--accent-primary, #10b981), #059669);
+  color: #06090f;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 4px 14px rgba(16, 185, 129, 0.25);
+}
+
+.remediation-gov-btn-save:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(16, 185, 129, 0.4);
+}
+
+.remediation-gov-btn-save:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.remediation-gov-btn-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(0, 0, 0, 0.3);
+  border-top-color: #000000;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+/* ------------------------------------------------------------
+   Empty & Loading States
+   ------------------------------------------------------------ */
+.remediation-gov-empty-state {
+  padding: 42px 20px;
+  text-align: center;
+  color: var(--text-muted, #74899d);
+}
+
+.remediation-gov-empty-icon {
+  margin: 0 auto 12px auto;
+  opacity: 0.6;
+}
+
+.remediation-gov-empty-state h3 {
+  margin: 0 0 6px 0;
+  font-size: 16px;
+  color: var(--text-bright, #e4edf0) !important;
+}
+
+.remediation-gov-empty-state p {
+  margin: 0;
+  font-size: 13px;
+  max-width: 420px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.remediation-gov-loading-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 40px;
+  color: var(--text-muted, #74899d);
+  font-size: 13px;
+}
+
+.remediation-gov-spinner {
+  width: 22px;
+  height: 22px;
+  border: 3px solid rgba(255, 255, 255, 0.08);
+  border-top-color: var(--accent-primary, #10b981);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

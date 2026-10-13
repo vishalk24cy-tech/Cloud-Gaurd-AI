@@ -1,0 +1,181 @@
+/* ============================================
+   Cloud Summary Component
+============================================ */
+
+.cloud-summary {
+  background: var(--bg-card);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-2xl);
+  padding: 24px 28px;
+  box-shadow: var(--shadow-md);
+}
+
+.summary-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.summary-header h2 {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-bright);
+  letter-spacing: -0.01em;
+}
+
+.summary-header p {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.summary-header .scan-info {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-size: 12px;
+}
+
+.summary-header .scan-info span {
+  color: var(--text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.summary-header .scan-info strong {
+  color: var(--accent-bright);
+  font-size: 13px;
+}
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
+  margin-bottom: 24px;
+}
+
+.summary-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  transition: all var(--duration) var(--ease-out);
+  position: relative;
+  overflow: hidden;
+}
+
+.summary-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--border-hover);
+  background: var(--bg-glass-hover);
+}
+
+.summary-card.blue   { --item-color: var(--accent-primary); }
+.summary-card.green  { --item-color: var(--accent-emerald); }
+.summary-card.orange { --item-color: var(--accent-orange); }
+.summary-card.purple { --item-color: var(--accent-amber); }
+.summary-card.red    { --item-color: var(--accent-crimson); }
+.summary-card.yellow { --item-color: var(--accent-amber); }
+.summary-card.emerald{ --item-color: var(--accent-primary); }
+.summary-card.pink   { --item-color: var(--text-secondary); }
+
+.summary-card .card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.summary-card .card-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.summary-card .card-status {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(6, 214, 160, 0.1);
+  color: var(--accent-bright);
+}
+
+.summary-card .card-value {
+  font-size: 24px;
+  font-weight: 800;
+  color: var(--item-color, var(--text-bright));
+  margin-bottom: 12px;
+}
+
+.progress {
+  height: 4px;
+  background: rgba(148, 163, 184, 0.08);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--item-color, var(--accent-primary));
+  border-radius: 999px;
+  transition: width 1s var(--ease-out);
+  box-shadow: 0 0 8px var(--item-color, var(--accent-primary));
+}
+
+.enterprise-panel {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 20px;
+}
+
+.enterprise-panel > div {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: 16px 20px;
+  text-align: center;
+}
+
+.enterprise-panel h3 {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 8px;
+}
+
+.risk-badge {
+  display: inline-block;
+  padding: 6px 18px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+}
+
+.risk-badge.critical { background: rgba(239, 68, 68, 0.15); color: var(--accent-crimson); border: 1px solid rgba(239, 68, 68, 0.3); }
+.risk-badge.high     { background: rgba(249, 115, 22, 0.15); color: var(--accent-orange);  border: 1px solid rgba(249, 115, 22, 0.3); }
+.risk-badge.medium   { background: rgba(251, 191, 36, 0.15); color: var(--accent-amber);   border: 1px solid rgba(251, 191, 36, 0.3); }
+.risk-badge.low      { background: rgba(16, 185, 129, 0.15); color: var(--accent-emerald); border: 1px solid rgba(16, 185, 129, 0.3); }
+
+.enterprise-panel .score {
+  font-size: 26px;
+  font-weight: 800;
+  color: var(--text-bright);
+}
+
+@media (max-width: 768px) {
+  .enterprise-panel {
+    grid-template-columns: 1fr;
+  }
+}

@@ -1,0 +1,30 @@
+/* Shared visual contract for legacy page styles. */
+:root {
+  color-scheme: dark;
+}
+
+body,
+#root,
+.app-layout,
+.main-section,
+.page-content {
+  background-color: var(--bg-deep);
+  color: var(--text-primary);
+}
+
+progress,
+meter {
+  accent-color: var(--accent-primary);
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-deep);
+}
+
+::-webkit-scrollbar-thumb {
+  background: #29435a;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3b5a70;
+}

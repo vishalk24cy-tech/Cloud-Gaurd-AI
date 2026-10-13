@@ -1,0 +1,840 @@
+/* ============================================================
+   CloudGuardAI - VPC & Network Resources CSS Styles
+   Phase 5: Network Security & Resource Management
+   ============================================================ */
+
+.net-page-container {
+  padding: 2rem;
+  max-width: 1440px;
+  margin: 0 auto;
+  min-height: 100vh;
+  color: var(--text-primary, #e2e8f0);
+}
+
+/* Header */
+.net-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+  margin-bottom: 2rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.net-header-left {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.net-icon-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.2) 0%, rgba(99, 102, 241, 0.2) 100%);
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  color: #60a5fa;
+  box-shadow: 0 0 20px rgba(59, 130, 246, 0.2);
+}
+
+.net-title {
+  font-size: 1.75rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #f8fafc;
+  margin: 0 0 0.25rem 0;
+}
+
+.net-subtitle {
+  font-size: 0.875rem;
+  color: #94a3b8;
+  margin: 0;
+}
+
+.net-header-controls {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.net-select-group {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.net-select-label {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: #94a3b8;
+}
+
+.net-select {
+  padding: 0.5rem 0.875rem;
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  color: #f1f5f9;
+  font-size: 0.8125rem;
+  outline: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.net-select:focus {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25);
+}
+
+/* Metrics Grid */
+.net-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1.25rem;
+  margin-bottom: 2rem;
+}
+
+.net-metric-card {
+  background: rgba(15, 23, 42, 0.6);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 1.25rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.net-metric-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.net-metric-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.net-metric-title {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #94a3b8;
+}
+
+.net-metric-value {
+  font-size: 1.875rem;
+  font-weight: 700;
+  color: #f8fafc;
+  line-height: 1.2;
+}
+
+.net-metric-footer {
+  font-size: 0.8125rem;
+  color: #94a3b8;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.dot-sep {
+  opacity: 0.5;
+}
+
+/* Navigation Tabs */
+.net-tabs-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  overflow-x: auto;
+  padding-bottom: 0.5rem;
+  margin-bottom: 1.25rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.net-tab-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.625rem 1.125rem;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: #94a3b8;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.2s ease;
+}
+
+.net-tab-btn:hover {
+  color: #f1f5f9;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.net-tab-btn.active {
+  color: #60a5fa;
+  background: rgba(59, 130, 246, 0.12);
+  border-color: rgba(59, 130, 246, 0.3);
+  font-weight: 600;
+}
+
+.net-tab-counter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.125rem 0.4rem;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  color: inherit;
+}
+
+/* Toolbar */
+.net-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.net-search-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 320px;
+  flex: 1;
+  max-width: 480px;
+}
+
+.net-search-icon {
+  position: absolute;
+  left: 0.875rem;
+  color: #64748b;
+  pointer-events: none;
+}
+
+.net-search-input {
+  width: 100%;
+  padding: 0.55rem 2.25rem 0.55rem 2.5rem;
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  color: #f8fafc;
+  font-size: 0.875rem;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.net-search-input:focus {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25);
+}
+
+.net-clear-btn {
+  position: absolute;
+  right: 0.75rem;
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  cursor: pointer;
+}
+
+.net-filter-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.net-filter-select {
+  padding: 0.5rem 0.875rem;
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  color: #f1f5f9;
+  font-size: 0.8125rem;
+  outline: none;
+  cursor: pointer;
+}
+
+.net-last-refreshed {
+  font-size: 0.75rem;
+  color: #64748b;
+}
+
+/* Error Banner */
+.net-error-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.875rem;
+  padding: 1rem 1.25rem;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 8px;
+  margin-bottom: 1.5rem;
+  color: #fca5a5;
+}
+
+.net-error-icon {
+  flex-shrink: 0;
+  margin-top: 0.125rem;
+  color: #ef4444;
+}
+
+.net-error-content p {
+  margin: 0.25rem 0 0 0;
+  font-size: 0.8125rem;
+}
+
+.net-close-error {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: #fca5a5;
+  cursor: pointer;
+}
+
+/* Table */
+.net-table-container {
+  background: rgba(15, 23, 42, 0.6);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  overflow-x: auto;
+}
+
+.net-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 0.875rem;
+}
+
+.net-table th {
+  padding: 0.875rem 1.25rem;
+  background: rgba(15, 23, 42, 0.9);
+  color: #94a3b8;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.net-table td {
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  vertical-align: middle;
+}
+
+.net-table tr:hover td {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.net-res-primary {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.net-res-name {
+  font-weight: 600;
+  color: #f1f5f9;
+}
+
+.net-res-sub {
+  font-size: 0.75rem;
+  color: #64748b;
+}
+
+.net-res-desc {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  display: block;
+  margin-top: 0.25rem;
+}
+
+/* Badges & Tags */
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.net-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.net-badge-critical {
+  background: rgba(239, 68, 68, 0.18);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+}
+
+.net-badge-high {
+  background: rgba(245, 158, 11, 0.18);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+}
+
+.net-badge-risk {
+  background: rgba(234, 179, 8, 0.15);
+  color: #facc15;
+  border: 1px solid rgba(234, 179, 8, 0.3);
+}
+
+.net-badge-secure {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.net-badge-warning {
+  background: rgba(249, 115, 22, 0.15);
+  color: #fb923c;
+  border: 1px solid rgba(249, 115, 22, 0.3);
+}
+
+.net-badge-evaluated {
+  background: rgba(100, 116, 139, 0.15);
+  color: #94a3b8;
+  border: 1px solid rgba(100, 116, 139, 0.3);
+}
+
+.net-cidr-badge {
+  display: inline-block;
+  padding: 0.2rem 0.5rem;
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  font-size: 0.75rem;
+  color: #cbd5e1;
+}
+
+.net-cidr-badge.secondary {
+  margin-left: 0.35rem;
+  color: #94a3b8;
+}
+
+.net-cidr-badge.badge-danger {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+  font-weight: 700;
+}
+
+.net-state-badge {
+  display: inline-block;
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.state-available {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+}
+
+.net-rule-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8125rem;
+  color: #cbd5e1;
+}
+
+.net-exposure-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.net-tag {
+  display: inline-block;
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+}
+
+.net-tag-critical {
+  background: rgba(239, 68, 68, 0.2);
+  color: #f87171;
+}
+
+.net-tag-high {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fbbf24;
+}
+
+.net-tag-secure {
+  background: rgba(16, 185, 129, 0.1);
+  color: #34d399;
+}
+
+/* Actions Cell & Buttons */
+.net-actions-cell {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.net-btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.875rem;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  color: #e2e8f0;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.net-btn-secondary:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.net-btn-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.75rem;
+  background: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  border-radius: 6px;
+  color: #60a5fa;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.net-btn-icon:hover {
+  background: rgba(59, 130, 246, 0.2);
+}
+
+.net-btn-remediate {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.75rem;
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 6px;
+  color: #f87171;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.net-btn-remediate:hover {
+  background: rgba(239, 68, 68, 0.25);
+}
+
+.net-btn-remediate-sm {
+  padding: 0.25rem 0.5rem;
+  background: rgba(239, 68, 68, 0.2);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-radius: 4px;
+  color: #f87171;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.net-btn-danger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 1rem;
+  background: #dc2626;
+  border: 1px solid #ef4444;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.net-btn-danger:hover:not(:disabled) {
+  background: #b91c1c;
+}
+
+.net-btn-danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Loading & Empty States */
+.net-loading-state,
+.net-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 4rem 2rem;
+  text-align: center;
+  color: #94a3b8;
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Modal */
+.net-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 999;
+  padding: 1.5rem;
+}
+
+.net-modal-card {
+  background: #0f172a;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 16px;
+  width: 100%;
+  max-width: 600px;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+}
+
+.net-modal-large {
+  max-width: 860px;
+}
+
+.net-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.25rem 1.5rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.net-modal-title-group {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.net-modal-title-group h2 {
+  font-size: 1.125rem;
+  font-weight: 700;
+  margin: 0;
+  color: #f8fafc;
+}
+
+.net-modal-close {
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  cursor: pointer;
+}
+
+.net-modal-body {
+  padding: 1.5rem;
+  flex: 1;
+}
+
+.net-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1.25rem 1.5rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(15, 23, 42, 0.95);
+}
+
+.net-link-btn {
+  margin-right: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: #60a5fa;
+  font-size: 0.8125rem;
+  text-decoration: none;
+}
+
+.net-link-btn:hover {
+  text-decoration: underline;
+}
+
+/* Modal Sub Tables */
+.net-rules-heading {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #f1f5f9;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.net-sub-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+}
+
+.net-sub-table th {
+  padding: 0.5rem 0.75rem;
+  background: rgba(255, 255, 255, 0.03);
+  color: #94a3b8;
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.net-sub-table td {
+  padding: 0.625rem 0.75rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.highlight-risk {
+  background: rgba(239, 68, 68, 0.05);
+}
+
+.net-source-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+/* Confirmation Box */
+.net-confirm-details-box {
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.net-confirm-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.25rem 0;
+  font-size: 0.8125rem;
+}
+
+.net-confirm-label {
+  color: #94a3b8;
+}
+
+.net-confirm-impact-box {
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1.25rem;
+  font-size: 0.8125rem;
+  color: #fde68a;
+}
+
+.net-confirm-impact-box h4 {
+  margin: 0 0 0.25rem 0;
+  font-size: 0.8125rem;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.net-confirm-impact-box p {
+  margin: 0;
+  color: #f1f5f9;
+}
+
+.net-confirm-checkbox-label {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  font-size: 0.8125rem;
+  color: #f1f5f9;
+  cursor: pointer;
+  user-select: none;
+}
+
+.net-confirm-checkbox-label input {
+  margin-top: 0.15rem;
+  accent-color: #ef4444;
+}
+
+.net-feedback-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-radius: 6px;
+  margin-bottom: 1rem;
+  font-size: 0.8125rem;
+}
+
+.net-feedback-banner.success {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.net-feedback-banner.error {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+/* Utilities */
+.text-blue { color: #60a5fa; }
+.text-indigo { color: #818cf8; }
+.text-red { color: #f87171; }
+.text-amber { color: #fbbf24; }
+.text-emerald { color: #34d399; }
+.text-muted { color: #64748b; }
+.text-right { text-align: right; }
+.font-semibold { font-weight: 600; }

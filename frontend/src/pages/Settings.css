@@ -1,0 +1,42 @@
+.settings-phase5 {
+  min-height: 100%;
+  padding: 28px 0 42px !important;
+  background: var(--bg-deep) !important;
+  color: var(--text-primary);
+}
+
+.settings-phase5 > div:first-child {
+  max-width: 1680px;
+  margin: 0 auto 18px;
+}
+
+.settings-phase5 > section {
+  max-width: 1680px;
+  margin-left: auto;
+  margin-right: auto;
+  background: var(--bg-card) !important;
+  border: 1px solid var(--border-default) !important;
+  border-radius: 11px !important;
+  box-shadow: none !important;
+}
+
+.settings-phase5 h1,
+.settings-phase5 h2,
+.settings-phase5 h3,
+.settings-phase5 strong { color: var(--text-bright) !important; }
+.settings-phase5 p,
+.settings-phase5 span { color: var(--text-muted); }
+.settings-phase5 button { border-radius: 8px !important; }
+.settings-phase5 input,
+.settings-phase5 select { background: var(--bg-deep) !important; border-color: var(--border-default) !important; color: var(--text-primary) !important; }
+.settings-phase5 [style*="#312e81"],
+.settings-phase5 [style*="#4338ca"] { color: var(--accent-bright) !important; background: rgba(16,185,129,.1) !important; }
+.settings-phase5 [style*="linear-gradient"] { background: var(--bg-elevated) !important; border-color: var(--border-default) !important; }
+.settings-phase5 [style*="#f8fafc"],
+.settings-phase5 [style*="#eef2ff"],
+.settings-phase5 [style*="#f5f3ff"] { background: var(--bg-elevated) !important; border-color: var(--border-subtle) !important; }
+
+@media (max-width: 700px) {
+  .settings-phase5 { padding: 20px 0 30px !important; }
+  .settings-phase5 > div:first-child { margin-bottom: 14px; }
+}

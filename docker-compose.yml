@@ -1,0 +1,24 @@
+services:
+
+  backend:
+    build:
+      context: ./backend
+    container_name: cloudguardai-backend
+    env_file:
+      - ./backend/.env
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ./backend
+    container_name: cloudguardai-worker
+    env_file:
+      - ./backend/.env
+    environment:
+      AWS_SHARED_CREDENTIALS_FILE: /root/.aws/credentials
+    volumes:
+      - "${USERPROFILE}/.aws:/root/.aws:ro"
+    command: ["python", "worker.py"]
+    restart: unless-stopped

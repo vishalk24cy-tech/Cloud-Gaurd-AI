@@ -62,3 +62,10 @@ export async function updateRemediationSettings(accountId, serviceToggles) {
   );
   return response.data;
 }
+
+export async function createAIRemediationProposal(findingId) {
+  const response = await api.post("/remediation/ai-proposals", {
+    finding_id: findingId,
+  });
+  return response.data;
+}

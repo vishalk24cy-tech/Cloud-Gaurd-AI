@@ -8,8 +8,10 @@ import {
   CircleAlert,
   LoaderCircle,
   ShieldCheck,
+  Sparkles,
 } from "lucide-react";
 import {
+  createAIRemediationProposal,
   createRemediationProposal,
   getRemediationActions,
   getRemediationAudit,
@@ -108,13 +110,63 @@ function friendlyError(error) {
   return error?.message || "The remediation request failed.";
 }
 
-function formatActionName(action) {
-  return String(action?.action_name || action?.action_id || "Remediation")
-    .replaceAll("_", " ");
+function friendlyAIError(error) {
+  const status = error?.response?.status;
+  const detail = error?.response?.data?.detail;
+
+  let detailMsg = "";
+  if (typeof detail === "string" && detail.trim()) {
+    detailMsg = detail.trim();
+  } else if (Array.isArray(detail) && detail.length > 0) {
+    const item = detail[0];
+    detailMsg = typeof item === "string" ? item : item?.msg || "";
+  } else if (typeof error?.response?.data?.message === "string") {
+    detailMsg = error.response.data.message.trim();
+  }
+
+  if (status === 401) {
+    return "Your session expired. Sign in again to continue.";
+  }
+  if (status === 403) {
+    return detailMsg || "You do not have permission to propose remediations. Viewer role is read-only.";
+  }
+  if (status === 404) {
+    return detailMsg || "The finding was not found or belongs to another organization.";
+  }
+  if (status === 409) {
+    return detailMsg || "This finding is already resolved or not actionable for remediation.";
+  }
+  if (status === 422) {
+    return detailMsg || "AI recommendation could not be validated or did not meet safety requirements.";
+  }
+  if (status === 503) {
+    return detailMsg || "AI remediation service is currently unavailable. Please check Gemini API configuration or try again later.";
+  }
+  if (status >= 500) {
+    return detailMsg || "CloudGuardAI could not complete the request. No success was reported.";
+  }
+  return detailMsg || error?.message || "Failed to generate AI remediation proposal.";
+}
+
+function formatActionName(action, fallbackId) {
+  if (action?.action_name) return action.action_name;
+  const raw = action?.action_id || fallbackId || "Remediation";
+  return String(raw).replaceAll("_", " ");
 }
 
 function statusLabel(value) {
   return String(value || "PROPOSED").replaceAll("_", " ");
+}
+
+function getUserRole() {
+  try {
+    const raw = localStorage.getItem("user");
+    if (!raw) return "viewer";
+    const parsed = JSON.parse(raw);
+    return String(parsed.role || "viewer").toLowerCase().trim();
+  } catch {
+    return "viewer";
+  }
 }
 
 function FindingRemediation({ finding, accountId }) {
@@ -128,6 +180,13 @@ function FindingRemediation({ finding, accountId }) {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
+  // AI remediation proposal state
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiResult, setAiResult] = useState(null);
+  const [aiError, setAiError] = useState("");
+
+  const isViewer = getUserRole() === "viewer";
+
   const candidate = useMemo(() => identifyAction(finding), [finding]);
   const findingStatus = getFindingStatus(finding);
   const gatedService = ["LAMBDA", "KMS"].includes(getService(finding));
@@ -140,6 +199,9 @@ function FindingRemediation({ finding, accountId }) {
     setAuditEvents([]);
     setError("");
     setMessage("");
+    setAiLoading(false);
+    setAiResult(null);
+    setAiError("");
 
     getRemediationActions()
       .then((items) => {
@@ -157,13 +219,31 @@ function FindingRemediation({ finding, accountId }) {
     };
   }, [finding?.finding_id, finding?.resource, finding?.issue]);
 
+  const activeActionId = proposal?.action_type || proposal?.action || candidate?.actionId;
   const action = useMemo(
-    () => actions.find((item) => item.action_id === candidate?.actionId) || null,
-    [actions, candidate]
+    () => actions.find((item) => item.action_id === activeActionId) || null,
+    [actions, activeActionId]
   );
   const executable = Boolean(
     candidate && action && EXECUTABLE_ACTIONS.has(action.action_id)
   );
+
+  const activeAiData = useMemo(() => {
+    if (aiResult) return aiResult;
+    const metadata = proposal?.metadata;
+    if (metadata?.rationale || typeof metadata?.confidence === "number") {
+      return {
+        status: "success",
+        created: proposal?.source === "ai",
+        deduplicated: false,
+        confidence: typeof metadata.confidence === "number" ? metadata.confidence : null,
+        rationale: metadata.rationale || null,
+        risk_notes: metadata.risk_notes || null,
+        action_id: metadata.suggested_action_id || proposal?.action_type || null,
+      };
+    }
+    return null;
+  }, [aiResult, proposal]);
 
   async function loadAudit(remediationId) {
     if (!remediationId) return;
@@ -172,6 +252,78 @@ function FindingRemediation({ finding, accountId }) {
       setAuditEvents(items);
     } catch {
       setAuditEvents([]);
+    }
+  }
+
+  async function handleSuggestAIFix() {
+    if (aiLoading || busy) return;
+    const findingId = finding?.finding_id || finding?._id;
+    if (!findingId) {
+      setAiError("A valid finding identifier is required to request an AI remediation proposal.");
+      return;
+    }
+
+    setAiLoading(true);
+    setAiError("");
+    setError("");
+    setMessage("");
+
+    try {
+      const response = await createAIRemediationProposal(findingId);
+
+      // Safe extraction of returned fields without assuming their presence
+      const rationale =
+        response?.rationale ||
+        response?.remediation?.metadata?.rationale ||
+        null;
+
+      const confidence =
+        typeof response?.confidence === "number"
+          ? response.confidence
+          : typeof response?.remediation?.metadata?.confidence === "number"
+            ? response.remediation.metadata.confidence
+            : null;
+
+      const riskNotes =
+        response?.risk_notes ||
+        response?.remediation?.metadata?.risk_notes ||
+        null;
+
+      const actionId =
+        response?.action_id ||
+        response?.remediation?.action_type ||
+        null;
+
+      const created = Boolean(response?.created);
+      const deduplicated = Boolean(response?.deduplicated);
+      const isNoAction = response?.status === "no_action";
+
+      setAiResult({
+        status: isNoAction ? "no_action" : "success",
+        created,
+        deduplicated,
+        action_id: actionId,
+        confidence,
+        rationale,
+        risk_notes: riskNotes,
+      });
+
+      if (isNoAction) {
+        setMessage("AI evaluated this finding: No registered automated action recommended.");
+      } else if (response?.remediation) {
+        const remediationDoc = response.remediation;
+        setProposal(remediationDoc);
+        if (deduplicated) {
+          setMessage("An active proposal already exists for this finding.");
+        } else {
+          setMessage("AI remediation proposal created. Approval required before AWS execution.");
+        }
+        await loadAudit(remediationDoc._id || remediationDoc.id);
+      }
+    } catch (requestError) {
+      setAiError(friendlyAIError(requestError));
+    } finally {
+      setAiLoading(false);
     }
   }
 
@@ -264,12 +416,10 @@ function FindingRemediation({ finding, accountId }) {
     setError("");
     setMessage("");
     try {
-      const response = await verifyRemediation(id);
-      // We don't have the full proposal returned, so we artificially update verification state locally
-      // Or we can just let it fetch if there's a fetcher, but we don't have one here.
+      await verifyRemediation(id);
       setProposal((prev) => ({
         ...prev,
-        verification: { ...prev.verification, status: "pending" },
+        verification: { ...prev?.verification, status: "pending" },
       }));
       setMessage("Verification scan requested successfully.");
       await loadAudit(id);
@@ -303,31 +453,79 @@ function FindingRemediation({ finding, accountId }) {
         <div className="finding-remediation__loading" role="status"><LoaderCircle size={16} /> Checking registered actions…</div>
       ) : actionsError ? (
         <div className="finding-remediation__notice finding-remediation__notice--red" role="alert"><CircleAlert size={16} /><p>{actionsError}</p></div>
-      ) : !candidate ? (
-        <div className="finding-remediation__notice" role="status"><AlertTriangle size={16} /><p>No executable action is available for this finding evidence.</p></div>
-      ) : !action ? (
-        <div className="finding-remediation__notice" role="status"><AlertTriangle size={16} /><p>The backend has not exposed a remediation action for this finding.</p></div>
-      ) : !EXECUTABLE_ACTIONS.has(action.action_id) ? (
-        <div className="finding-remediation__notice finding-remediation__notice--amber" role="status"><AlertTriangle size={16} /><p>This registered action is not enabled for execution.</p></div>
-      ) : findingStatus !== "OPEN" ? (
-        <div className="finding-remediation__notice" role="status"><Check size={16} /><p>Remediation proposals are available only for open findings.</p></div>
       ) : proposal ? (
         <div className="finding-remediation__proposal" aria-live="polite">
           <div className="finding-remediation__proposal-top">
             <span className="finding-remediation__status"><Check size={13} /> {statusLabel(actionStatus)}</span>
-            <strong>Proposal created</strong>
+            <strong>{proposal?.source === "ai" ? "AI Proposal Active" : "Proposal Created"}</strong>
           </div>
+
+          {activeAiData && (
+            <div className="finding-remediation__ai-card">
+              <div className="finding-remediation__ai-card-header">
+                <div className="finding-remediation__ai-card-title">
+                  <Sparkles size={14} className="finding-remediation__ai-sparkle" />
+                  <strong>AI Recommendation Analysis</strong>
+                </div>
+                <div className="finding-remediation__ai-badges">
+                  {typeof activeAiData.confidence === "number" && (
+                    <span
+                      className={`finding-remediation__confidence-pill finding-remediation__confidence-pill--${
+                        activeAiData.confidence >= 0.8
+                          ? "high"
+                          : activeAiData.confidence >= 0.6
+                          ? "medium"
+                          : "low"
+                      }`}
+                      title={`Confidence: ${(activeAiData.confidence * 100).toFixed(1)}%`}
+                    >
+                      {Math.round(activeAiData.confidence * 100)}% Confidence
+                    </span>
+                  )}
+                  {activeAiData.deduplicated ? (
+                    <span className="finding-remediation__status-pill finding-remediation__status-pill--warning">
+                      Existing Proposal Active
+                    </span>
+                  ) : (
+                    <span className="finding-remediation__status-pill finding-remediation__status-pill--success">
+                      AI Proposal Generated
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {activeAiData.rationale && (
+                <div className="finding-remediation__ai-field">
+                  <span className="finding-remediation__ai-field-label">AI Rationale</span>
+                  <p className="finding-remediation__ai-field-text">{activeAiData.rationale}</p>
+                </div>
+              )}
+
+              {activeAiData.risk_notes && (
+                <div className="finding-remediation__ai-field">
+                  <span className="finding-remediation__ai-field-label">Risk Considerations</span>
+                  <p className="finding-remediation__ai-field-text finding-remediation__ai-field-text--risk">
+                    {activeAiData.risk_notes}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
           <dl className="finding-remediation__facts">
-            <div><dt>Action</dt><dd>{formatActionName(action)}</dd></div>
+            <div><dt>Action</dt><dd>{formatActionName(action, proposal?.action_type)}</dd></div>
             <div><dt>Resource</dt><dd>{resourceLabel}</dd></div>
             <div><dt>AWS account</dt><dd>{finding.aws_account_id || "Connected account"}</dd></div>
             <div><dt>Finding status</dt><dd>{findingStatus}</dd></div>
+            {proposal?.source && (
+              <div><dt>Source</dt><dd>{proposal.source === "ai" ? "AI (Gemini)" : "Manual"}</dd></div>
+            )}
           </dl>
           
           {(actionStatus === "PROPOSED" || actionStatus === "PENDING_APPROVAL") && (
             <div className="finding-remediation__actions-bar">
               <p className="finding-remediation__safe-note">This proposal has not changed AWS. Approval is required before execution.</p>
-              <button className="finding-remediation__start" onClick={handleApprove} disabled={busy}>
+              <button className="finding-remediation__start" onClick={handleApprove} disabled={busy || aiLoading}>
                 {busy ? <LoaderCircle size={15} className="finding-remediation__spin" /> : <ShieldCheck size={15} />}
                 {busy ? "Approving..." : "Approve Remediation"}
               </button>
@@ -337,7 +535,7 @@ function FindingRemediation({ finding, accountId }) {
           {actionStatus === "APPROVED" && (
             <div className="finding-remediation__actions-bar">
               <p className="finding-remediation__safe-note">Approval granted. Explicit execution confirmation is required to modify AWS.</p>
-              <button className="finding-remediation__start finding-remediation__start--execute" onClick={handleExecute} disabled={busy}>
+              <button className="finding-remediation__start finding-remediation__start--execute" onClick={handleExecute} disabled={busy || aiLoading}>
                 {busy ? <LoaderCircle size={15} className="finding-remediation__spin" /> : <ShieldCheck size={15} />}
                 {busy ? "Executing on AWS..." : "Execute Remediation"}
               </button>
@@ -372,7 +570,7 @@ function FindingRemediation({ finding, accountId }) {
                     ) : (
                       <div className="finding-remediation__actions-bar">
                         <p className="finding-remediation__safe-note">Execution completed. Request a re-evaluation scan to verify the security finding is resolved.</p>
-                        <button className="finding-remediation__start" onClick={handleVerify} disabled={busy}>
+                        <button className="finding-remediation__start" onClick={handleVerify} disabled={busy || aiLoading}>
                           {busy ? <LoaderCircle size={15} className="finding-remediation__spin" /> : <ShieldCheck size={15} />}
                           {busy ? "Requesting..." : "Verify Remediation"}
                         </button>
@@ -385,7 +583,14 @@ function FindingRemediation({ finding, accountId }) {
           )}
 
           {error && <div className="finding-remediation__inline-error" role="alert"><CircleAlert size={15} />{error}</div>}
+          {aiError && <div className="finding-remediation__inline-error" role="alert"><CircleAlert size={15} />{aiError}</div>}
           {message && <div className="finding-remediation__inline-success" role="status">{message}</div>}
+
+          {isViewer && (
+            <p className="finding-remediation__role-note">
+              Role: Viewer (Read-only). Approving or executing remediation proposals requires Owner or Admin permissions.
+            </p>
+          )}
 
           <Link className="finding-remediation__link" to={`/remediation?remediation_id=${encodeURIComponent(proposal._id || proposal.id || "")}`}>
             Open in Remediation Center <ArrowRight size={14} />
@@ -401,25 +606,29 @@ function FindingRemediation({ finding, accountId }) {
             </ol>
           )}
         </div>
+      ) : findingStatus !== "OPEN" ? (
+        <div className="finding-remediation__notice" role="status"><Check size={16} /><p>Remediation proposals are available only for open findings.</p></div>
       ) : (
         <>
-          <div className="finding-remediation__action-row">
-            <div>
-              <strong>{formatActionName(action)}</strong>
-              <span>{action.service} · {action.resource_type}</span>
-              <small>Risk: {action.risk_level || "—"} · {action.classification}</small>
+          {action && (
+            <div className="finding-remediation__action-row">
+              <div>
+                <strong>{formatActionName(action)}</strong>
+                <span>{action.service} · {action.resource_type}</span>
+                <small>Risk: {action.risk_level || "—"} · {action.classification}</small>
+              </div>
+              <button
+                className="finding-remediation__detail-toggle"
+                type="button"
+                aria-expanded={detailsOpen}
+                onClick={() => setDetailsOpen((open) => !open)}
+              >
+                {detailsOpen ? "Hide details" : "View action"}<ChevronDown size={14} />
+              </button>
             </div>
-            <button
-              className="finding-remediation__detail-toggle"
-              type="button"
-              aria-expanded={detailsOpen}
-              onClick={() => setDetailsOpen((open) => !open)}
-            >
-              {detailsOpen ? "Hide details" : "View action"}<ChevronDown size={14} />
-            </button>
-          </div>
+          )}
 
-          {detailsOpen && (
+          {detailsOpen && action && (
             <div className="finding-remediation__details">
               <dl>
                 <div><dt>Action ID</dt><dd>{action.action_id}</dd></div>
@@ -434,22 +643,114 @@ function FindingRemediation({ finding, accountId }) {
             </div>
           )}
 
+          {!candidate && (
+            <div className="finding-remediation__notice" role="status">
+              <AlertTriangle size={16} />
+              <p>No deterministic rule matched this finding. You can use AI to recommend a registered remediation.</p>
+            </div>
+          )}
+
           <div className="finding-remediation__target">
             <span>Target resource</span>
-            <strong>{candidate.resourceId || finding.resource || "Derived from this finding"}</strong>
+            <strong>{candidate?.resourceId || finding.resource || "Derived from this finding"}</strong>
           </div>
 
+          {activeAiData && (
+            <div className="finding-remediation__ai-card">
+              <div className="finding-remediation__ai-card-header">
+                <div className="finding-remediation__ai-card-title">
+                  <Sparkles size={14} className="finding-remediation__ai-sparkle" />
+                  <strong>AI Remediation Advisory</strong>
+                </div>
+                <div className="finding-remediation__ai-badges">
+                  {typeof activeAiData.confidence === "number" && (
+                    <span
+                      className={`finding-remediation__confidence-pill finding-remediation__confidence-pill--${
+                        activeAiData.confidence >= 0.8
+                          ? "high"
+                          : activeAiData.confidence >= 0.6
+                          ? "medium"
+                          : "low"
+                      }`}
+                      title={`Confidence: ${(activeAiData.confidence * 100).toFixed(1)}%`}
+                    >
+                      {Math.round(activeAiData.confidence * 100)}% Confidence
+                    </span>
+                  )}
+                  {activeAiData.status === "no_action" && (
+                    <span className="finding-remediation__status-pill finding-remediation__status-pill--neutral">
+                      No Action Recommended
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {activeAiData.rationale && (
+                <div className="finding-remediation__ai-field">
+                  <span className="finding-remediation__ai-field-label">AI Rationale</span>
+                  <p className="finding-remediation__ai-field-text">{activeAiData.rationale}</p>
+                </div>
+              )}
+
+              {activeAiData.risk_notes && (
+                <div className="finding-remediation__ai-field">
+                  <span className="finding-remediation__ai-field-label">Risk Considerations</span>
+                  <p className="finding-remediation__ai-field-text finding-remediation__ai-field-text--risk">
+                    {activeAiData.risk_notes}
+                  </p>
+                </div>
+              )}
+
+              {activeAiData.status === "no_action" && (
+                <p className="finding-remediation__safe-note">
+                  Gemini analyzed this finding and did not recommend any registered automated remediation. Manual review is suggested.
+                </p>
+              )}
+            </div>
+          )}
+
           {error && <div className="finding-remediation__inline-error" role="alert"><CircleAlert size={15} />{error}</div>}
+          {aiError && <div className="finding-remediation__inline-error" role="alert"><CircleAlert size={15} />{aiError}</div>}
           {message && <div className="finding-remediation__inline-success" role="status">{message}</div>}
 
-          {!accountId ? (
-            <div className="finding-remediation__notice finding-remediation__notice--red" role="alert"><CircleAlert size={16} /><p>The connected AWS account reference is missing from this scan. Refresh findings before creating a proposal.</p></div>
-          ) : (
-            <button className="finding-remediation__start" type="button" onClick={startProposal} disabled={busy}>
-              {busy ? <LoaderCircle size={15} className="finding-remediation__spin" /> : <ShieldCheck size={15} />}
-              {busy ? "Creating proposal…" : "Start remediation"}
-            </button>
+          {isViewer && (
+            <p className="finding-remediation__role-note">
+              Role: Viewer (Read-only). Creating remediation proposals requires Owner or Admin permissions.
+            </p>
           )}
+
+          <div className="finding-remediation__button-row">
+            <button
+              className="finding-remediation__start finding-remediation__start--ai"
+              type="button"
+              onClick={handleSuggestAIFix}
+              disabled={aiLoading || busy}
+            >
+              {aiLoading ? (
+                <LoaderCircle size={15} className="finding-remediation__spin" />
+              ) : (
+                <Sparkles size={15} />
+              )}
+              {aiLoading ? "Analyzing with AI…" : "Suggest Fix with AI"}
+            </button>
+
+            {executable && accountId && (
+              <button
+                className="finding-remediation__start"
+                type="button"
+                onClick={startProposal}
+                disabled={busy || aiLoading}
+              >
+                {busy ? (
+                  <LoaderCircle size={15} className="finding-remediation__spin" />
+                ) : (
+                  <ShieldCheck size={15} />
+                )}
+                {busy ? "Creating proposal…" : "Start remediation"}
+              </button>
+            )}
+          </div>
+
           <p className="finding-remediation__safe-note">Creation does not execute AWS changes. The backend revalidates authorization and resource ownership.</p>
         </>
       )}

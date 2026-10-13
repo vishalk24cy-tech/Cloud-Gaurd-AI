@@ -219,10 +219,154 @@
 .finding-remediation__audit li { display: flex; justify-content: space-between; gap: 10px; color: var(--rem-muted); font-size: 9px; }
 .finding-remediation__audit time { text-align: right; }
 
+.finding-remediation__button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.finding-remediation__start--ai {
+  background: linear-gradient(135deg, #163f2f 0%, #175438 100%);
+  border-color: #49d39a;
+  color: #f1fff7;
+  box-shadow: 0 0 10px rgba(73, 211, 154, 0.12);
+}
+
+.finding-remediation__start--ai:hover:not(:disabled) {
+  background: linear-gradient(135deg, #1c523d 0%, #1c6846 100%);
+  border-color: #6ee7b7;
+  box-shadow: 0 0 14px rgba(73, 211, 154, 0.22);
+}
+
+.finding-remediation__ai-card {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid rgba(73, 211, 154, 0.25);
+  border-radius: 6px;
+  background: var(--rem-panel);
+}
+
+.finding-remediation__ai-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-bottom: 9px;
+  border-bottom: 1px solid var(--rem-border);
+}
+
+.finding-remediation__ai-card-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--rem-text);
+  font-size: 11px;
+}
+
+.finding-remediation__ai-sparkle {
+  color: var(--rem-green);
+}
+
+.finding-remediation__ai-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.finding-remediation__confidence-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 750;
+  font-family: monospace;
+}
+
+.finding-remediation__confidence-pill--high {
+  background: rgba(73, 211, 154, 0.15);
+  border: 1px solid rgba(73, 211, 154, 0.4);
+  color: var(--rem-green);
+}
+
+.finding-remediation__confidence-pill--medium {
+  background: rgba(232, 184, 94, 0.15);
+  border: 1px solid rgba(232, 184, 94, 0.4);
+  color: var(--rem-amber);
+}
+
+.finding-remediation__confidence-pill--low {
+  background: rgba(241, 120, 120, 0.15);
+  border: 1px solid rgba(241, 120, 120, 0.4);
+  color: var(--rem-red);
+}
+
+.finding-remediation__status-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.finding-remediation__status-pill--success {
+  background: rgba(73, 211, 154, 0.15);
+  border: 1px solid rgba(73, 211, 154, 0.4);
+  color: var(--rem-green);
+}
+
+.finding-remediation__status-pill--warning {
+  background: rgba(232, 184, 94, 0.15);
+  border: 1px solid rgba(232, 184, 94, 0.4);
+  color: var(--rem-amber);
+}
+
+.finding-remediation__status-pill--neutral {
+  background: rgba(160, 176, 166, 0.15);
+  border: 1px solid rgba(160, 176, 166, 0.35);
+  color: var(--rem-muted);
+}
+
+.finding-remediation__ai-field {
+  margin-top: 10px;
+}
+
+.finding-remediation__ai-field-label {
+  display: block;
+  color: var(--rem-muted);
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.finding-remediation__ai-field-text {
+  margin: 4px 0 0;
+  color: var(--rem-text);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.finding-remediation__ai-field-text--risk {
+  color: var(--rem-amber);
+}
+
+.finding-remediation__role-note {
+  margin: 9px 0 0;
+  color: var(--rem-muted);
+  font-size: 9px;
+  line-height: 1.45;
+  font-style: italic;
+}
+
 @media (max-width: 520px) {
   .finding-remediation { padding: 12px; }
   .finding-remediation__details dl,
   .finding-remediation__facts { grid-template-columns: 1fr; }
   .finding-remediation__action-row { flex-direction: column; }
   .finding-remediation__target { grid-template-columns: 1fr; }
+  .finding-remediation__button-row { flex-direction: column; }
 }

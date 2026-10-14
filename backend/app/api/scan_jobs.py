@@ -1,61 +1,28 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
-from typing import Optional
+# ============================================================
+# CloudGuardAI - Scan Jobs API
+# Production / Commercial SaaS
+# ============================================================
 
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, Query
+
+from app.models.aws_account import get_account
 from app.services.scan_job_service import (
     create_scan_job,
     get_scan_job,
     get_scan_jobs,
 )
-
-from app.middleware.auth_middleware import verify_token
+from app.services.tenant_context import (
+    TenantContext,
+    get_tenant_context,
+    require_analyst_or_above,
+)
 
 
 router = APIRouter(
     prefix="/scan-jobs",
     tags=["Scan Jobs"],
 )
-
-
-# ============================================================
-# HELPERS
-# ============================================================
-
-def _get_user_id(
-    current_user: dict
-) -> str:
-
-    user_id = (
-        current_user.get("_id")
-        or current_user.get("user_id")
-        or current_user.get("id")
-    )
-
-    if not user_id:
-
-        raise HTTPException(
-            status_code=401,
-            detail="Authenticated user ID is missing.",
-        )
-
-    return str(user_id)
-
-
-def _get_organization_id(
-    current_user: dict
-) -> str:
-
-    organization_id = current_user.get(
-        "organization"
-    )
-
-    if not organization_id:
-
-        raise HTTPException(
-            status_code=403,
-            detail="Organization context is required.",
-        )
-
-    return str(organization_id)
 
 
 # ============================================================
@@ -69,26 +36,42 @@ def create_job(
         min_length=1,
         description="Connected AWS account ID",
     ),
-
-    current_user: dict = Depends(
-        verify_token
+    context: TenantContext = Depends(
+        require_analyst_or_above
     ),
 ):
+    """
+    Create a new queued AWS security scan job.
 
-    user_id = _get_user_id(
-        current_user
+    Authorization:
+    - Requires authenticated active tenant membership with role
+      owner, admin, or analyst. Viewers are denied (403 Forbidden).
+    - Validates that the requested AWS account belongs to the
+      authenticated tenant and is in 'connected' status.
+    """
+    account = get_account(
+        account_id=account_id,
+        organization_id=context.organization_id,
     )
 
-    organization_id = _get_organization_id(
-        current_user
-    )
+    if not account:
+        raise HTTPException(
+            status_code=404,
+            detail="Connected AWS account not found in organization.",
+        )
+
+    if account.get("status") != "connected":
+        raise HTTPException(
+            status_code=400,
+            detail=f"AWS account is not connected (status: {account.get('status', 'unknown')}).",
+        )
 
     try:
-
         job = create_scan_job(
-            organization_id=organization_id,
-            user_id=user_id,
-            account_id=account_id,
+            organization_id=context.organization_id,
+            user_id=context.user_id,
+            account_id=str(account["_id"]),
+            aws_account_id=account.get("aws_account_id"),
         )
 
         return {
@@ -98,18 +81,15 @@ def create_job(
         }
 
     except ValueError as exc:
-
         raise HTTPException(
             status_code=400,
             detail=str(exc),
         )
 
     except HTTPException:
-
         raise
 
     except Exception:
-
         raise HTTPException(
             status_code=500,
             detail="Unable to create scan job.",
@@ -130,26 +110,21 @@ def list_jobs(
             "completed, failed"
         ),
     ),
-
     limit: int = Query(
         default=50,
         ge=1,
         le=100,
     ),
-
-    current_user: dict = Depends(
-        verify_token
+    context: TenantContext = Depends(
+        get_tenant_context
     ),
 ):
-
-    organization_id = _get_organization_id(
-        current_user
-    )
-
+    """
+    Return scan jobs for the authenticated organization only.
+    """
     try:
-
         jobs = get_scan_jobs(
-            organization_id=organization_id,
+            organization_id=context.organization_id,
             limit=limit,
             status=status,
         )
@@ -161,18 +136,15 @@ def list_jobs(
         }
 
     except ValueError as exc:
-
         raise HTTPException(
             status_code=400,
             detail=str(exc),
         )
 
     except HTTPException:
-
         raise
 
     except Exception:
-
         raise HTTPException(
             status_code=500,
             detail="Unable to retrieve scan jobs.",
@@ -186,25 +158,24 @@ def list_jobs(
 @router.get("/{job_id}")
 def get_job(
     job_id: str,
-
-    current_user: dict = Depends(
-        verify_token
+    context: TenantContext = Depends(
+        get_tenant_context
     ),
 ):
+    """
+    Get a single scan job belonging to the authenticated organization.
 
-    organization_id = _get_organization_id(
-        current_user
-    )
-
+    Cross-tenant isolation:
+    Returns 404 Not Found if the job does not exist in the tenant,
+    never disclosing whether it exists in another organization.
+    """
     try:
-
         job = get_scan_job(
             job_id=job_id,
-            organization_id=organization_id,
+            organization_id=context.organization_id,
         )
 
         if not job:
-
             raise HTTPException(
                 status_code=404,
                 detail="Scan job not found.",
@@ -216,18 +187,15 @@ def get_job(
         }
 
     except HTTPException:
-
         raise
 
     except ValueError as exc:
-
         raise HTTPException(
             status_code=400,
             detail=str(exc),
         )
 
     except Exception:
-
         raise HTTPException(
             status_code=500,
             detail="Unable to retrieve scan job.",

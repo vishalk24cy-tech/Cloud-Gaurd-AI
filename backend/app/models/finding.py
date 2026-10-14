@@ -3,12 +3,15 @@
 # Production / Commercial SaaS
 # ============================================================
 
+import logging
 from datetime import datetime
 
 from bson import ObjectId
 from bson.errors import InvalidId
 
 from app.database.connection import db
+
+logger = logging.getLogger("cloudguardai.finding_model")
 
 
 # ============================================================
@@ -497,29 +500,128 @@ def _normalize_organization_id(value):
 # Build Finding Query
 # ============================================================
 
+def _get_trusted_account_ids_for_org(organization_id):
+    """Return string representations of AWS accounts belonging to an organization."""
+    if not organization_id:
+        return []
+    try:
+        accounts = list(db.aws_accounts.find({"organization_id": str(organization_id)}, {"_id": 1}))
+        result = []
+        for acc in accounts:
+            raw_id = acc.get("_id")
+            if raw_id is not None:
+                result.append(str(raw_id))
+        return result
+    except Exception as exc:
+        logger.warning("Error fetching trusted accounts for organization %s: %s", organization_id, exc)
+        return []
+
+
+def _verify_and_backfill_legacy_finding(finding, organization_id):
+    """
+    Verify ownership of a legacy finding with missing or empty organization_id.
+    Ownership is verified strictly through trusted AWS account or scan job data.
+    If ownership is verified, backfills organization_id and returns True.
+    If unverified or belongs to another organization, fails closed and returns False.
+    """
+    if not finding or not organization_id:
+        return False
+
+    raw_org = finding.get("organization_id")
+    if raw_org is not None and str(raw_org).strip():
+        return str(raw_org).strip() == str(organization_id).strip()
+
+    account_id = finding.get("account_id")
+    verified = False
+
+    if account_id:
+        account_str = str(account_id).strip()
+        account_obj = _to_object_id(account_str)
+        acc_queries = [{"_id": account_str}]
+        if account_obj:
+            acc_queries.append({"_id": account_obj})
+
+        try:
+            matched_acc = db.aws_accounts.find_one({
+                "$or": acc_queries,
+                "organization_id": str(organization_id).strip(),
+            })
+            if matched_acc:
+                verified = True
+        except Exception as exc:
+            logger.warning("Error checking account ownership for legacy finding: %s", exc)
+
+    if not verified:
+        scan_id = finding.get("scan_job_id") or finding.get("scan_id")
+        if scan_id:
+            scan_str = str(scan_id).strip()
+            scan_obj = _to_object_id(scan_str)
+            scan_queries = [{"_id": scan_str}]
+            if scan_obj:
+                scan_queries.append({"_id": scan_obj})
+            try:
+                matched_job = db.scan_jobs.find_one({
+                    "$or": scan_queries,
+                    "organization_id": str(organization_id).strip(),
+                })
+                if matched_job:
+                    verified = True
+            except Exception as exc:
+                logger.warning("Error checking scan job ownership for legacy finding: %s", exc)
+
+    if verified:
+        now = datetime.utcnow()
+        try:
+            findings_collection.update_one(
+                {"_id": finding["_id"]},
+                {
+                    "$set": {
+                        "organization_id": str(organization_id).strip(),
+                        "updated_at": now,
+                    }
+                },
+            )
+            finding["organization_id"] = str(organization_id).strip()
+            finding["updated_at"] = now
+            logger.info(
+                "Backfilled organization_id=%s onto legacy finding_id=%s",
+                organization_id,
+                finding.get("finding_id"),
+            )
+            return True
+        except Exception as exc:
+            logger.error("Failed to backfill organization_id onto legacy finding: %s", exc)
+            return False
+
+    logger.warning(
+        "Legacy finding %s (account_id=%s) ownership could not be established for organization %s. Failing closed.",
+        finding.get("finding_id"),
+        account_id,
+        organization_id,
+    )
+    return False
+
+
 def _build_finding_query(
     finding_id,
-    user_id,
+    user_id=None,
     organization_id=None,
 ):
     """
     Build a tenant-safe finding query.
 
-    The authenticated user is ALWAYS included.
-    When organization_id is supplied, the organization is also
-    included so a finding cannot cross SaaS tenant boundaries.
+    When organization_id is supplied, the query is scoped strictly to
+    that verified organization so findings belong to the organization
+    and all authorized members can collaborate.
+    When organization_id is absent, scopes by user_id for backward compatibility.
     """
-
-    query = {
-        "user_id": str(user_id)
-    }
-
-    organization_id = _normalize_organization_id(
-        organization_id
-    )
+    query = {}
+    organization_id = _normalize_organization_id(organization_id)
 
     if organization_id:
         query["organization_id"] = organization_id
+    elif user_id is not None:
+        query["user_id"] = str(user_id)
 
     object_id = _to_object_id(finding_id)
 
@@ -1083,7 +1185,7 @@ def upsert_finding(data, user_id, organization_id=None):
 # ============================================================
 
 def get_user_findings(
-    user_id,
+    user_id=None,
     status=None,
     severity=None,
     service=None,
@@ -1092,21 +1194,32 @@ def get_user_findings(
     organization_id=None,
 ):
     """
-    Return findings belonging only to the authenticated tenant.
+    Return findings belonging to the authenticated tenant organization.
 
     NOT_APPLICABLE findings are hidden by default.
     """
-
-    query = {
-        "user_id": str(user_id)
-    }
-
     organization_id = _normalize_organization_id(
         organization_id
     )
 
     if organization_id:
-        query["organization_id"] = organization_id
+        trusted_accounts = _get_trusted_account_ids_for_org(organization_id)
+        if trusted_accounts:
+            query = {
+                "$or": [
+                    {"organization_id": organization_id},
+                    {
+                        "organization_id": {"$in": [None, ""]},
+                        "account_id": {"$in": trusted_accounts},
+                    },
+                ]
+            }
+        else:
+            query = {"organization_id": organization_id}
+    else:
+        query = {
+            "user_id": str(user_id)
+        } if user_id is not None else {}
 
     if not include_not_applicable:
         query["status"] = {
@@ -1156,18 +1269,37 @@ def get_user_findings(
 
 def get_finding(
     finding_id,
-    user_id,
+    user_id=None,
     organization_id=None,
 ):
     """
     Get one finding while enforcing tenant ownership.
-    """
 
-    query = _build_finding_query(
-        finding_id,
-        user_id,
-        organization_id=organization_id,
-    )
+    When organization_id is supplied, scopes to that organization across
+    all organization members. Automatically verifies and backfills legacy
+    findings with missing organization_id if ownership can be proven.
+    """
+    organization_id = _normalize_organization_id(organization_id)
+    object_id = _to_object_id(finding_id)
+    id_clause = {"_id": object_id} if object_id else {"finding_id": str(finding_id)}
+
+    if organization_id:
+        finding = findings_collection.find_one({
+            **id_clause,
+            "organization_id": organization_id,
+        })
+        if finding:
+            return _serialize_finding(finding)
+
+        candidate = findings_collection.find_one(id_clause)
+        if candidate and _verify_and_backfill_legacy_finding(candidate, organization_id):
+            return _serialize_finding(candidate)
+
+        return None
+
+    query = {**id_clause}
+    if user_id is not None:
+        query["user_id"] = str(user_id)
 
     finding = findings_collection.find_one(
         query
@@ -1184,8 +1316,8 @@ def get_finding(
 
 def get_finding_for_account(
     finding_id,
-    user_id,
-    account_id,
+    user_id=None,
+    account_id=None,
     organization_id=None,
 ):
     """
@@ -1193,17 +1325,21 @@ def get_finding_for_account(
 
     Verifies all three relationships:
 
-        authenticated user
+        authenticated organization / user
               ↓
         finding ownership
               ↓
         AWS account ownership
 
     The finding must belong to the specified account.
-
-    This is intended for remediation and other
-    security-sensitive workflows.
     """
+    if organization_id:
+        finding = get_finding(finding_id, user_id=user_id, organization_id=organization_id)
+        if not finding:
+            return None
+        if account_id and str(finding.get("account_id")) != str(account_id):
+            return None
+        return finding
 
     query = _build_finding_query(
         finding_id,
@@ -1211,9 +1347,10 @@ def get_finding_for_account(
         organization_id=organization_id,
     )
 
-    query["account_id"] = str(
-        account_id
-    )
+    if account_id:
+        query["account_id"] = str(
+            account_id
+        )
 
     finding = findings_collection.find_one(
         query
@@ -1319,8 +1456,8 @@ def is_finding_actionable(finding):
 
 def update_finding_status(
     finding_id,
-    user_id,
-    status,
+    user_id=None,
+    status=None,
     resolution=None,
     organization_id=None,
 ):
@@ -1330,7 +1467,6 @@ def update_finding_status(
     Resolution is supported so the Findings API can safely
     provide a resolution message when closing a finding.
     """
-
     status = str(
         status
     ).strip().upper()
@@ -1340,18 +1476,26 @@ def update_finding_status(
             f"Invalid finding status: {status}"
         )
 
+    organization_id = _normalize_organization_id(organization_id)
+    if organization_id:
+        existing = get_finding(finding_id, user_id=user_id, organization_id=organization_id)
+        if not existing:
+            return False
+    else:
+        query = _build_finding_query(
+            finding_id,
+            user_id,
+            organization_id=organization_id,
+        )
+        existing = findings_collection.find_one(query)
+        if not existing:
+            return False
+
     query = _build_finding_query(
         finding_id,
         user_id,
         organization_id=organization_id,
     )
-
-    existing = findings_collection.find_one(
-        query
-    )
-
-    if not existing:
-        return False
 
     now = datetime.utcnow()
 
@@ -1361,19 +1505,16 @@ def update_finding_status(
         "updated_at": now,
     }
 
+    if organization_id:
+        update_fields["organization_id"] = organization_id
+
     # ========================================================
     # RESOLVED
     # ========================================================
 
     if status == WORKFLOW_RESOLVED:
-
-        update_fields[
-            "resolved_at"
-        ] = now
-
-        update_fields[
-            "resolution"
-        ] = (
+        update_fields["resolved_at"] = now
+        update_fields["resolution"] = (
             str(resolution).strip()
             if resolution
             else "Resolved"
@@ -1384,14 +1525,8 @@ def update_finding_status(
     # ========================================================
 
     elif status == WORKFLOW_NOT_APPLICABLE:
-
-        update_fields[
-            "resolved_at"
-        ] = now
-
-        update_fields[
-            "resolution"
-        ] = (
+        update_fields["resolved_at"] = now
+        update_fields["resolution"] = (
             str(resolution).strip()
             if resolution
             else "Not applicable"
@@ -1402,21 +1537,13 @@ def update_finding_status(
     # ========================================================
 
     else:
-
-        update_fields[
-            "resolved_at"
-        ] = None
-
+        update_fields["resolved_at"] = None
         if resolution:
-            update_fields[
-                "resolution"
-            ] = str(
+            update_fields["resolution"] = str(
                 resolution
             ).strip()
         else:
-            update_fields[
-                "resolution"
-            ] = None
+            update_fields["resolution"] = None
 
     result = findings_collection.update_one(
         query,
@@ -1434,13 +1561,18 @@ def update_finding_status(
 
 def assign_finding(
     finding_id,
-    user_id,
-    assigned_to,
+    user_id=None,
+    assigned_to=None,
     organization_id=None,
 ):
     """
     Assign a finding while enforcing tenant ownership.
     """
+    organization_id = _normalize_organization_id(organization_id)
+    if organization_id:
+        existing = get_finding(finding_id, user_id=user_id, organization_id=organization_id)
+        if not existing:
+            return False
 
     query = _build_finding_query(
         finding_id,
@@ -1448,13 +1580,17 @@ def assign_finding(
         organization_id=organization_id,
     )
 
+    update_fields = {
+        "assigned_to": assigned_to,
+        "updated_at": datetime.utcnow(),
+    }
+    if organization_id:
+        update_fields["organization_id"] = organization_id
+
     result = findings_collection.update_one(
         query,
         {
-            "$set": {
-                "assigned_to": assigned_to,
-                "updated_at": datetime.utcnow(),
-            }
+            "$set": update_fields
         },
     )
 
@@ -1467,13 +1603,18 @@ def assign_finding(
 
 def update_finding_notes(
     finding_id,
-    user_id,
-    notes,
+    user_id=None,
+    notes="",
     organization_id=None,
 ):
     """
     Update analyst notes while enforcing ownership.
     """
+    organization_id = _normalize_organization_id(organization_id)
+    if organization_id:
+        existing = get_finding(finding_id, user_id=user_id, organization_id=organization_id)
+        if not existing:
+            return False
 
     query = _build_finding_query(
         finding_id,
@@ -1481,13 +1622,17 @@ def update_finding_notes(
         organization_id=organization_id,
     )
 
+    update_fields = {
+        "notes": notes,
+        "updated_at": datetime.utcnow(),
+    }
+    if organization_id:
+        update_fields["organization_id"] = organization_id
+
     result = findings_collection.update_one(
         query,
         {
-            "$set": {
-                "notes": notes,
-                "updated_at": datetime.utcnow(),
-            }
+            "$set": update_fields
         },
     )
 
@@ -1500,12 +1645,17 @@ def update_finding_notes(
 
 def update_last_seen(
     finding_id,
-    user_id,
+    user_id=None,
     organization_id=None,
 ):
     """
     Update the last-seen timestamp.
     """
+    organization_id = _normalize_organization_id(organization_id)
+    if organization_id:
+        existing = get_finding(finding_id, user_id=user_id, organization_id=organization_id)
+        if not existing:
+            return False
 
     query = _build_finding_query(
         finding_id,
@@ -1513,13 +1663,17 @@ def update_last_seen(
         organization_id=organization_id,
     )
 
+    update_fields = {
+        "last_seen": datetime.utcnow(),
+        "updated_at": datetime.utcnow(),
+    }
+    if organization_id:
+        update_fields["organization_id"] = organization_id
+
     result = findings_collection.update_one(
         query,
         {
-            "$set": {
-                "last_seen": datetime.utcnow(),
-                "updated_at": datetime.utcnow(),
-            }
+            "$set": update_fields
         },
     )
 
@@ -1532,12 +1686,17 @@ def update_last_seen(
 
 def delete_finding(
     finding_id,
-    user_id,
+    user_id=None,
     organization_id=None,
 ):
     """
     Delete a finding belonging to the authenticated tenant.
     """
+    organization_id = _normalize_organization_id(organization_id)
+    if organization_id:
+        existing = get_finding(finding_id, user_id=user_id, organization_id=organization_id)
+        if not existing:
+            return False
 
     query = _build_finding_query(
         finding_id,
@@ -1670,27 +1829,53 @@ def get_graph_statistics(user_id, account_id=None, organization_id=None):
 # ============================================================
 
 def get_finding_statistics(
-    user_id,
+    user_id=None,
     organization_id=None,
 ):
     """
-    Return statistics for actionable findings.
+    Return statistics for actionable findings scoped to tenant organization.
 
     NOT_APPLICABLE findings are tracked separately.
     """
-
-    user_id = str(user_id)
-
-    base_query = {
-        "user_id": user_id,
-        "status": {
-            "$ne": WORKFLOW_NOT_APPLICABLE
-        },
-    }
-
     organization_id = _normalize_organization_id(organization_id)
+
     if organization_id:
-        base_query["organization_id"] = organization_id
+        trusted_accounts = _get_trusted_account_ids_for_org(organization_id)
+        if trusted_accounts:
+            org_scope = {
+                "$or": [
+                    {"organization_id": organization_id},
+                    {
+                        "organization_id": {"$in": [None, ""]},
+                        "account_id": {"$in": trusted_accounts},
+                    },
+                ]
+            }
+        else:
+            org_scope = {"organization_id": organization_id}
+
+        base_query = {
+            **org_scope,
+            "status": {
+                "$ne": WORKFLOW_NOT_APPLICABLE
+            },
+        }
+        protected_query = {
+            **org_scope,
+            "status": WORKFLOW_NOT_APPLICABLE,
+        }
+    else:
+        user_id = str(user_id) if user_id is not None else ""
+        base_query = {
+            "user_id": user_id,
+            "status": {
+                "$ne": WORKFLOW_NOT_APPLICABLE
+            },
+        }
+        protected_query = {
+            "user_id": user_id,
+            "status": WORKFLOW_NOT_APPLICABLE,
+        }
 
     total = findings_collection.count_documents(
         base_query
@@ -1753,10 +1938,7 @@ def get_finding_statistics(
     )
 
     protected_count = findings_collection.count_documents(
-        {
-            "user_id": user_id,
-            "status": WORKFLOW_NOT_APPLICABLE,
-        }
+        protected_query
     )
 
     return {
@@ -1784,24 +1966,42 @@ def get_finding_statistics(
 # ============================================================
 
 def get_findings_by_service(
-    user_id,
+    user_id=None,
     organization_id=None,
 ):
     """
-    Group actionable findings by AWS service.
+    Group actionable findings by AWS service for tenant organization.
     """
-
     organization_id = _normalize_organization_id(organization_id)
 
-    match_query = {
-        "user_id": str(user_id),
-        "status": {
-            "$ne": WORKFLOW_NOT_APPLICABLE
-        },
-    }
-
     if organization_id:
-        match_query["organization_id"] = organization_id
+        trusted_accounts = _get_trusted_account_ids_for_org(organization_id)
+        if trusted_accounts:
+            org_scope = {
+                "$or": [
+                    {"organization_id": organization_id},
+                    {
+                        "organization_id": {"$in": [None, ""]},
+                        "account_id": {"$in": trusted_accounts},
+                    },
+                ]
+            }
+        else:
+            org_scope = {"organization_id": organization_id}
+
+        match_query = {
+            **org_scope,
+            "status": {
+                "$ne": WORKFLOW_NOT_APPLICABLE
+            },
+        }
+    else:
+        match_query = {
+            "user_id": str(user_id) if user_id is not None else "",
+            "status": {
+                "$ne": WORKFLOW_NOT_APPLICABLE
+            },
+        }
 
     pipeline = [
         {
@@ -1850,24 +2050,42 @@ def get_findings_by_service(
 # ============================================================
 
 def get_findings_by_severity(
-    user_id,
+    user_id=None,
     organization_id=None,
 ):
     """
-    Group actionable findings by severity.
+    Group actionable findings by severity for tenant organization.
     """
-
     organization_id = _normalize_organization_id(organization_id)
 
-    match_query = {
-        "user_id": str(user_id),
-        "status": {
-            "$ne": WORKFLOW_NOT_APPLICABLE
-        },
-    }
-
     if organization_id:
-        match_query["organization_id"] = organization_id
+        trusted_accounts = _get_trusted_account_ids_for_org(organization_id)
+        if trusted_accounts:
+            org_scope = {
+                "$or": [
+                    {"organization_id": organization_id},
+                    {
+                        "organization_id": {"$in": [None, ""]},
+                        "account_id": {"$in": trusted_accounts},
+                    },
+                ]
+            }
+        else:
+            org_scope = {"organization_id": organization_id}
+
+        match_query = {
+            **org_scope,
+            "status": {
+                "$ne": WORKFLOW_NOT_APPLICABLE
+            },
+        }
+    else:
+        match_query = {
+            "user_id": str(user_id) if user_id is not None else "",
+            "status": {
+                "$ne": WORKFLOW_NOT_APPLICABLE
+            },
+        }
 
     pipeline = [
         {

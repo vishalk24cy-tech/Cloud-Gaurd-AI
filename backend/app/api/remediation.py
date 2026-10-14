@@ -2952,9 +2952,17 @@ def execute_remediation(
     # No boto3 calls belong in this API layer.
     # --------------------------------------------------------
 
+    ctx = _coerce_tenant_context(context, required_role="owner_or_admin", request=request)
+    user_id = ctx.user_id
+    organization_id = ctx.organization_id
+    role = ctx.role
+
     result = execute_approved_remediation(
         remediation_id=remediation_id,
         user_id=user_id,
+        organization_id=organization_id,
+        role=role,
+        confirmed=bool(payload and payload.confirmed),
     )
 
     # --------------------------------------------------------

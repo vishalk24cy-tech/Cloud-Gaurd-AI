@@ -1853,6 +1853,9 @@ def execute_action(
 def execute_approved_remediation(
     remediation_id: str,
     user_id: str,
+    organization_id: Optional[str] = None,
+    role: Optional[str] = None,
+    confirmed: bool = True,
 ) -> Dict[str, Any]:
     """
     Main entry point used by the remediation API/service.
@@ -1861,7 +1864,7 @@ def execute_approved_remediation(
 
         remediation_id
               ↓
-        user ownership
+        user / organization ownership
               ↓
         account ownership
               ↓
@@ -1892,13 +1895,24 @@ def execute_approved_remediation(
             "Authenticated user ID is required."
         )
 
+    if role and str(role).strip().lower() not in {"owner", "admin"}:
+        raise RemediationSecurityError(
+            "Owner or admin role is required to execute remediation."
+        )
+
+    if confirmed is not True:
+        raise RemediationSecurityError(
+            "Explicit execution confirmation is required."
+        )
+
     # --------------------------------------------------------
     # Load remediation using tenant-scoped model access.
     # --------------------------------------------------------
 
     remediation = get_remediation(
         remediation_id,
-        user_id,
+        user_id=user_id,
+        organization_id=organization_id,
     )
 
     if not remediation:
@@ -1906,8 +1920,15 @@ def execute_approved_remediation(
             "Remediation proposal was not found."
         )
 
+    if organization_id:
+        rem_org = str(remediation.get("organization_id") or "").strip()
+        if rem_org and rem_org != str(organization_id).strip():
+            raise RemediationSecurityError(
+                "Remediation does not belong to the active organization."
+            )
+
     # --------------------------------------------------------
-    # Prevent duplicate execution.
+    # Prevent duplicate execution and enforce approval.
     # --------------------------------------------------------
 
     current_status = _normalize_status(
@@ -1918,6 +1939,11 @@ def execute_approved_remediation(
         raise RemediationValidationError(
             f"Remediation is not approved. "
             f"Current status: {current_status or 'UNKNOWN'}."
+        )
+
+    if "approved_by" in remediation and not remediation.get("approved_by"):
+        raise RemediationSecurityError(
+            "Remediation must be approved by an authorized actor before execution."
         )
 
     # --------------------------------------------------------
@@ -1935,12 +1961,18 @@ def execute_approved_remediation(
 
     account = get_account(
         account_id,
-        user_id,
+        user_id=user_id,
+        organization_id=organization_id,
     )
 
     if not account:
         raise RemediationSecurityError(
-            "AWS account does not belong to the authenticated user."
+            "AWS account does not belong to the authenticated organization/user."
+        )
+
+    if account.get("status") != "connected":
+        raise RemediationSecurityError(
+            "Connected AWS account is required for execution."
         )
 
     # --------------------------------------------------------
@@ -1958,8 +1990,9 @@ def execute_approved_remediation(
 
     finding = get_finding_for_account(
         finding_id,
-        user_id,
-        account_id,
+        user_id=user_id,
+        account_id=account_id,
+        organization_id=organization_id,
     )
 
     if not finding:
@@ -2026,7 +2059,8 @@ def execute_approved_remediation(
         service_key = _action_to_service.get(action_type, service_name)
 
     organization_id = _safe_string(
-        account.get("organization_id")
+        organization_id
+        or account.get("organization_id")
         or remediation.get("organization_id")
     )
 
@@ -2043,6 +2077,7 @@ def execute_approved_remediation(
     execution_status_updated = transition_to_executing(
         remediation_id=remediation_id,
         user_id=user_id,
+        organization_id=organization_id,
     )
 
     if not execution_status_updated:
@@ -2136,11 +2171,13 @@ def execute_approved_remediation(
             remediation_id,
             user_id,
             result,
+            organization_id=organization_id,
         )
 
         completed_status_updated = transition_to_completed(
             remediation_id=remediation_id,
             user_id=user_id,
+            organization_id=organization_id,
         )
 
         if not completed_status_updated:
@@ -2202,12 +2239,14 @@ def execute_approved_remediation(
                 remediation_id,
                 user_id,
                 failure_result,
+                organization_id=organization_id,
             )
 
             transition_to_failed(
                 remediation_id=remediation_id,
                 user_id=user_id,
                 execution_error=error_message,
+                organization_id=organization_id,
             )
 
         except Exception as persistence_exc:

@@ -202,20 +202,21 @@ def execute_ec2_stop(
             message="The remediation action does not satisfy the required approval policy.",
         )
 
-    if str(remediation.get("user_id")) != str(user_id):
-        raise EC2StopExecutionError(
-            status_code=404,
-            code="REMEDIATION_NOT_FOUND",
-            category="TENANT_VALIDATION",
-            message="Remediation not found.",
-        )
-
-    if str(remediation.get("organization_id") or "") != str(organization_id):
+    rem_org = str(remediation.get("organization_id") or "").strip()
+    if not rem_org or rem_org != str(organization_id).strip():
         raise EC2StopExecutionError(
             status_code=403,
             code="ORGANIZATION_MISMATCH",
             category="TENANT_VALIDATION",
             message="Remediation does not belong to the active organization.",
+        )
+
+    if not remediation.get("user_id"):
+        raise EC2StopExecutionError(
+            status_code=404,
+            code="REMEDIATION_NOT_FOUND",
+            category="TENANT_VALIDATION",
+            message="Remediation proposer not found.",
         )
 
     if (
@@ -339,6 +340,7 @@ def execute_ec2_stop(
         if not transition_to_executing(
             remediation_id=remediation["_id"],
             user_id=user_id,
+            organization_id=organization_id,
         ):
             raise EC2StopExecutionError(
                 status_code=409,
@@ -400,6 +402,7 @@ def execute_ec2_stop(
             user_id,
             after_state=after_state,
             verification=verification,
+            organization_id=organization_id,
         ):
             raise EC2StopExecutionError(
                 status_code=500,
@@ -407,7 +410,11 @@ def execute_ec2_stop(
                 category="WORKFLOW_PERSISTENCE",
                 message="AWS state was verified but the remediation result could not be saved.",
             )
-        if not transition_to_completed(remediation["_id"], user_id):
+        if not transition_to_completed(
+            remediation["_id"],
+            user_id,
+            organization_id=organization_id,
+        ):
             raise EC2StopExecutionError(
                 status_code=500,
                 code="COMPLETION_TRANSITION_FAILED",
@@ -444,6 +451,7 @@ def execute_ec2_stop(
                 remediation["_id"],
                 user_id,
                 execution_error=f"{error.code}:{error.category}",
+                organization_id=organization_id,
             )
             _record_event(
                 remediation=remediation,
@@ -487,6 +495,7 @@ def execute_ec2_stop(
                 remediation["_id"],
                 user_id,
                 execution_error=f"{error_code}:{error_category}",
+                organization_id=organization_id,
             )
             _record_event(
                 remediation=remediation,

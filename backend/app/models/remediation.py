@@ -823,9 +823,12 @@ def update_remediation_status(
 # ATOMIC APPROVED -> EXECUTING
 # ============================================================
 
+
 def transition_to_executing(
     remediation_id,
-    user_id,
+    user_id=None,
+    organization_id=None,
+    executed_by=None,
 ):
     """
     Atomically move:
@@ -845,20 +848,30 @@ def transition_to_executing(
 
     now = _utc_now()
 
+    query = {
+        "_id": object_id,
+        "status": STATUS_APPROVED,
+    }
+    if organization_id:
+        query["organization_id"] = str(organization_id).strip()
+    elif user_id:
+        query["user_id"] = str(user_id).strip()
+
+    executor = str(executed_by or user_id or "").strip()
+    set_dict = {
+        "status": STATUS_EXECUTING,
+        "started_at": now,
+        "updated_at": now,
+        "execution_error": None,
+    }
+    if executor:
+        set_dict["executed_by"] = executor
+
     result = remediations_collection.update_one(
+        query,
         {
-            "_id": object_id,
-            "user_id": str(user_id),
-            "status": STATUS_APPROVED,
+            "$set": set_dict,
         },
-        {
-            "$set": {
-                "status": STATUS_EXECUTING,
-                "started_at": now,
-                "updated_at": now,
-                "execution_error": None,
-            }
-        }
     )
 
     return result.modified_count > 0
@@ -870,7 +883,9 @@ def transition_to_executing(
 
 def transition_to_completed(
     remediation_id,
-    user_id,
+    user_id=None,
+    organization_id=None,
+    executed_by=None,
 ):
     """
     Atomically move:
@@ -887,20 +902,30 @@ def transition_to_completed(
 
     now = _utc_now()
 
+    query = {
+        "_id": object_id,
+        "status": STATUS_EXECUTING,
+    }
+    if organization_id:
+        query["organization_id"] = str(organization_id).strip()
+    elif user_id:
+        query["user_id"] = str(user_id).strip()
+
+    executor = str(executed_by or user_id or "").strip()
+    set_dict = {
+        "status": STATUS_COMPLETED,
+        "completed_at": now,
+        "updated_at": now,
+        "execution_error": None,
+    }
+    if executor:
+        set_dict["executed_by"] = executor
+
     result = remediations_collection.update_one(
+        query,
         {
-            "_id": object_id,
-            "user_id": str(user_id),
-            "status": STATUS_EXECUTING,
+            "$set": set_dict,
         },
-        {
-            "$set": {
-                "status": STATUS_COMPLETED,
-                "completed_at": now,
-                "updated_at": now,
-                "execution_error": None,
-            }
-        }
     )
 
     return result.modified_count > 0
@@ -912,8 +937,10 @@ def transition_to_completed(
 
 def transition_to_failed(
     remediation_id,
-    user_id,
+    user_id=None,
     execution_error=None,
+    organization_id=None,
+    executed_by=None,
 ):
     """
     Atomically move:
@@ -930,21 +957,31 @@ def transition_to_failed(
 
     now = _utc_now()
 
+    query = {
+        "_id": object_id,
+        "status": STATUS_EXECUTING,
+    }
+    if organization_id:
+        query["organization_id"] = str(organization_id).strip()
+    elif user_id:
+        query["user_id"] = str(user_id).strip()
+
+    executor = str(executed_by or user_id or "").strip()
+    set_dict = {
+        "status": STATUS_FAILED,
+        "updated_at": now,
+        "execution_error": _clean(
+            execution_error
+        ),
+    }
+    if executor:
+        set_dict["executed_by"] = executor
+
     result = remediations_collection.update_one(
+        query,
         {
-            "_id": object_id,
-            "user_id": str(user_id),
-            "status": STATUS_EXECUTING,
+            "$set": set_dict,
         },
-        {
-            "$set": {
-                "status": STATUS_FAILED,
-                "updated_at": now,
-                "execution_error": _clean(
-                    execution_error
-                ),
-            }
-        }
     )
 
     return result.modified_count > 0
@@ -956,10 +993,11 @@ def transition_to_failed(
 
 def update_execution_result(
     remediation_id,
-    user_id,
+    user_id=None,
     after_state=None,
     verification=None,
     execution_error=None,
+    organization_id=None,
 ):
     """
     Store the AWS execution result.
@@ -976,8 +1014,11 @@ def update_execution_result(
 
     query = {
         "_id": object_id,
-        "user_id": str(user_id),
     }
+    if organization_id:
+        query["organization_id"] = str(organization_id).strip()
+    elif user_id:
+        query["user_id"] = str(user_id).strip()
 
     update_fields = {
         "updated_at": _utc_now(),
@@ -1014,7 +1055,8 @@ def update_execution_result(
 
 def reconcile_successful_execution(
     remediation_id,
-    user_id,
+    user_id=None,
+    organization_id=None,
 ):
     """
     Recovery helper.
@@ -1048,12 +1090,15 @@ def reconcile_successful_execution(
     if object_id is None:
         return False
 
-    remediation = remediations_collection.find_one(
-        {
-            "_id": object_id,
-            "user_id": str(user_id),
-        }
-    )
+    find_query = {
+        "_id": object_id,
+    }
+    if organization_id:
+        find_query["organization_id"] = str(organization_id).strip()
+    elif user_id:
+        find_query["user_id"] = str(user_id).strip()
+
+    remediation = remediations_collection.find_one(find_query)
 
     if not remediation:
         return False

@@ -159,10 +159,11 @@ def execute_rds_disable_public_access(
         or not action.requires_approval
     ):
         raise RDSDisablePublicAccessError(status_code=409, code="ACTION_POLICY_MISMATCH", category="ACTION_VALIDATION", message="The remediation action does not satisfy the required approval policy.")
-    if str(remediation.get("user_id")) != str(user_id):
-        raise RDSDisablePublicAccessError(status_code=404, code="REMEDIATION_NOT_FOUND", category="TENANT_VALIDATION", message="Remediation not found.")
-    if str(remediation.get("organization_id") or "") != str(organization_id):
+    rem_org = str(remediation.get("organization_id") or "").strip()
+    if not rem_org or rem_org != str(organization_id).strip():
         raise RDSDisablePublicAccessError(status_code=403, code="ORGANIZATION_MISMATCH", category="TENANT_VALIDATION", message="Remediation does not belong to the active organization.")
+    if not remediation.get("user_id"):
+        raise RDSDisablePublicAccessError(status_code=404, code="REMEDIATION_NOT_FOUND", category="TENANT_VALIDATION", message="Remediation proposer not found.")
     if str(remediation.get("status", "")).upper() != STATUS_APPROVED or not remediation.get("approved_by") or not remediation.get("approved_at"):
         raise RDSDisablePublicAccessError(status_code=409, code="APPROVAL_REQUIRED", category="APPROVAL_VALIDATION", message="Remediation must be approved before execution.")
     if confirmed is not True:
@@ -219,7 +220,7 @@ def execute_rds_disable_public_access(
         if instance.get("PubliclyAccessible") is not True:
             raise RDSDisablePublicAccessError(status_code=409, code="RDS_NOT_PUBLIC", category="RESOURCE_VALIDATION", message="The RDS instance is not publicly accessible and requires no public-access remediation.")
 
-        if not transition_to_executing(remediation["_id"], user_id):
+        if not transition_to_executing(remediation["_id"], user_id, organization_id=organization_id):
             raise RDSDisablePublicAccessError(status_code=409, code="EXECUTION_ALREADY_CLAIMED", category="WORKFLOW_VALIDATION", message="This remediation is already being processed or is no longer approved.")
         execution_started = True
         start_audit = _record_event(remediation=remediation, user_id=user_id, organization_id=organization_id, request_id=request_id, event_type=EVENT_REMEDIATION_EXECUTION_STARTED, action="RDS public-access disable started", execution_state=STATUS_EXECUTING, verification_result="PENDING", aws_request_id=aws_request_id)
@@ -237,16 +238,16 @@ def execute_rds_disable_public_access(
 
         after_state = {"success": True, "resource_id": identifier, "publicly_accessible": False}
         verification = {"verified": True, "expected_publicly_accessible": False, "observed_publicly_accessible": False}
-        if not update_execution_result(remediation["_id"], user_id, after_state=after_state, verification=verification):
+        if not update_execution_result(remediation["_id"], user_id, after_state=after_state, verification=verification, organization_id=organization_id):
             raise RDSDisablePublicAccessError(status_code=500, code="RESULT_PERSISTENCE_FAILED", category="WORKFLOW_PERSISTENCE", message="RDS state was verified but the remediation result could not be saved.")
-        if not transition_to_completed(remediation["_id"], user_id):
+        if not transition_to_completed(remediation["_id"], user_id, organization_id=organization_id):
             raise RDSDisablePublicAccessError(status_code=500, code="COMPLETION_TRANSITION_FAILED", category="WORKFLOW_PERSISTENCE", message="RDS state was verified but the remediation could not be completed.")
         completion_audit = _record_event(remediation=remediation, user_id=user_id, organization_id=organization_id, request_id=request_id, event_type=EVENT_REMEDIATION_COMPLETED, action="RDS public access disabled and verified", execution_state=STATUS_COMPLETED, success=True, verification_result="VERIFIED_NOT_PUBLIC", aws_request_id=aws_request_id)
         return {"success": True, "status": STATUS_COMPLETED, "remediation_id": remediation["_id"], "action_id": RDS_DISABLE_PUBLIC_ACCESS_ACTION, "service": "RDS", "resource_type": "RDS_INSTANCE", "resource_id": identifier, "aws_account_id": expected_account_id, "verification": verification, "audit_recorded": bool(completion_audit)}
     except RDSDisablePublicAccessError as error:
         if not getattr(error, "audit_recorded", False):
             if execution_started:
-                transition_to_failed(remediation["_id"], user_id, execution_error=f"{error.code}:{error.category}")
+                transition_to_failed(remediation["_id"], user_id, execution_error=f"{error.code}:{error.category}", organization_id=organization_id)
                 _record_event(remediation=remediation, user_id=user_id, organization_id=organization_id, request_id=request_id, event_type=EVENT_REMEDIATION_FAILED, action="RDS public-access disable failed", execution_state=STATUS_FAILED, success=False, error_code=error.code, error_category=error.category, verification_result="FAILED", aws_request_id=aws_request_id)
             else:
                 _record_event(remediation=remediation, user_id=user_id, organization_id=organization_id, request_id=request_id, event_type=EVENT_REMEDIATION_FAILED, action="RDS public-access attempt failed before mutation", execution_state="NOT_STARTED", confirmation_state="CONFIRMED" if confirmed else "NOT_CONFIRMED", success=False, error_code=error.code, error_category=error.category, verification_result="NOT_RUN", aws_request_id=aws_request_id)
@@ -269,6 +270,6 @@ def execute_rds_disable_public_access(
         else:
             category, status_code, message = "AWS_API", 502 if execution_started else 503, "The RDS remediation could not be completed."
         if execution_started:
-            transition_to_failed(remediation["_id"], user_id, execution_error=f"{error_code}:{category}")
+            transition_to_failed(remediation["_id"], user_id, execution_error=f"{error_code}:{category}", organization_id=organization_id)
         _record_event(remediation=remediation, user_id=user_id, organization_id=organization_id, request_id=request_id, event_type=EVENT_REMEDIATION_FAILED, action="RDS public-access disable failed" if execution_started else "RDS public-access validation failed", execution_state=STATUS_FAILED if execution_started else "NOT_STARTED", confirmation_state="CONFIRMED" if confirmed else "NOT_CONFIRMED", success=False, error_code=error_code, error_category=category, verification_result="FAILED" if execution_started else "NOT_RUN", aws_request_id=aws_request_id)
         raise RDSDisablePublicAccessError(status_code=status_code, code=error_code, category=category, message=message, audit_recorded=True) from None

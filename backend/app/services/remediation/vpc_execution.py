@@ -188,10 +188,11 @@ def execute_vpc_remove_ssh_ingress(
         or not action.requires_approval
     ):
         raise VPCIngressExecutionError(status_code=409, code="ACTION_POLICY_MISMATCH", category="ACTION_VALIDATION", message="The remediation action does not satisfy the required approval policy.")
-    if str(remediation.get("user_id")) != str(user_id):
-        raise VPCIngressExecutionError(status_code=404, code="REMEDIATION_NOT_FOUND", category="TENANT_VALIDATION", message="Remediation not found.")
-    if str(remediation.get("organization_id") or "") != str(organization_id):
+    rem_org = str(remediation.get("organization_id") or "").strip()
+    if not rem_org or rem_org != str(organization_id).strip():
         raise VPCIngressExecutionError(status_code=403, code="ORGANIZATION_MISMATCH", category="TENANT_VALIDATION", message="Remediation does not belong to the active organization.")
+    if not remediation.get("user_id"):
+        raise VPCIngressExecutionError(status_code=404, code="REMEDIATION_NOT_FOUND", category="TENANT_VALIDATION", message="Remediation proposer not found.")
     if str(remediation.get("status", "")).upper() != STATUS_APPROVED or not remediation.get("approved_by") or not remediation.get("approved_at"):
         raise VPCIngressExecutionError(status_code=409, code="APPROVAL_REQUIRED", category="APPROVAL_VALIDATION", message="Remediation must be approved before execution.")
     if confirmed is not True:
@@ -253,7 +254,7 @@ def execute_vpc_remove_ssh_ingress(
         if not _matching_permissions(groups[0], rule):
             raise VPCIngressExecutionError(status_code=409, code="TARGET_RULE_NOT_FOUND", category="RESOURCE_VALIDATION", message="The exact public SSH ingress rule was not found; no rule was changed.")
 
-        if not transition_to_executing(remediation["_id"], user_id):
+        if not transition_to_executing(remediation["_id"], user_id, organization_id=organization_id):
             raise VPCIngressExecutionError(status_code=409, code="EXECUTION_ALREADY_CLAIMED", category="WORKFLOW_VALIDATION", message="This remediation is already being processed or is no longer approved.")
         execution_started = True
         start_audit = _record_event(remediation=remediation, user_id=user_id, organization_id=organization_id, request_id=request_id, event_type=EVENT_REMEDIATION_EXECUTION_STARTED, action="VPC SSH ingress removal started", execution_state=STATUS_EXECUTING, verification_result="PENDING", aws_request_id=aws_request_id)
@@ -278,16 +279,16 @@ def execute_vpc_remove_ssh_ingress(
 
         after_state = {"success": True, "resource_id": rule["security_group_id"], "removed_rule": {"protocol": "tcp", "from_port": 22, "to_port": 22, "source": rule["source"]}}
         verification = {"verified": True, "rule_absent": True, "protocol": "tcp", "from_port": 22, "to_port": 22, "source": rule["source"]}
-        if not update_execution_result(remediation["_id"], user_id, after_state=after_state, verification=verification):
+        if not update_execution_result(remediation["_id"], user_id, after_state=after_state, verification=verification, organization_id=organization_id):
             raise VPCIngressExecutionError(status_code=500, code="RESULT_PERSISTENCE_FAILED", category="WORKFLOW_PERSISTENCE", message="AWS state was verified but the remediation result could not be saved.")
-        if not transition_to_completed(remediation["_id"], user_id):
+        if not transition_to_completed(remediation["_id"], user_id, organization_id=organization_id):
             raise VPCIngressExecutionError(status_code=500, code="COMPLETION_TRANSITION_FAILED", category="WORKFLOW_PERSISTENCE", message="AWS state was verified but the remediation could not be completed.")
         completion_audit = _record_event(remediation=remediation, user_id=user_id, organization_id=organization_id, request_id=request_id, event_type=EVENT_REMEDIATION_COMPLETED, action="VPC SSH ingress removal completed", execution_state=STATUS_COMPLETED, success=True, verification_result="VERIFIED_RULE_REMOVED", aws_request_id=aws_request_id)
         return {"success": True, "status": STATUS_COMPLETED, "remediation_id": remediation["_id"], "action_id": VPC_REMOVE_INGRESS_ACTION, "service": "VPC", "resource_type": "SECURITY_GROUP", "resource_id": rule["security_group_id"], "aws_account_id": expected_account_id, "verification": verification, "audit_recorded": bool(completion_audit)}
     except VPCIngressExecutionError as error:
         if not getattr(error, "audit_recorded", False):
             if execution_started:
-                transition_to_failed(remediation["_id"], user_id, execution_error=f"{error.code}:{error.category}")
+                transition_to_failed(remediation["_id"], user_id, execution_error=f"{error.code}:{error.category}", organization_id=organization_id)
                 _record_event(remediation=remediation, user_id=user_id, organization_id=organization_id, request_id=request_id, event_type=EVENT_REMEDIATION_FAILED, action="VPC SSH ingress removal failed", execution_state=STATUS_FAILED, success=False, error_code=error.code, error_category=error.category, verification_result="FAILED", aws_request_id=aws_request_id)
             else:
                 _record_event(remediation=remediation, user_id=user_id, organization_id=organization_id, request_id=request_id, event_type=EVENT_REMEDIATION_FAILED, action="VPC ingress attempt failed before mutation", execution_state="NOT_STARTED", confirmation_state="CONFIRMED" if confirmed else "NOT_CONFIRMED", success=False, error_code=error.code, error_category=error.category, verification_result="NOT_RUN", aws_request_id=aws_request_id)
@@ -308,6 +309,6 @@ def execute_vpc_remove_ssh_ingress(
         else:
             category, status_code, message = "AWS_API", 502 if execution_started else 503, "The VPC remediation could not be completed."
         if execution_started:
-            transition_to_failed(remediation["_id"], user_id, execution_error=f"{error_code}:{category}")
+            transition_to_failed(remediation["_id"], user_id, execution_error=f"{error_code}:{category}", organization_id=organization_id)
         _record_event(remediation=remediation, user_id=user_id, organization_id=organization_id, request_id=request_id, event_type=EVENT_REMEDIATION_FAILED, action="VPC ingress removal failed" if execution_started else "VPC ingress validation failed", execution_state=STATUS_FAILED if execution_started else "NOT_STARTED", confirmation_state="CONFIRMED" if confirmed else "NOT_CONFIRMED", success=False, error_code=error_code, error_category=category, verification_result="FAILED" if execution_started else "NOT_RUN", aws_request_id=aws_request_id)
         raise VPCIngressExecutionError(status_code=status_code, code=error_code, category=category, message=message, audit_recorded=True) from None

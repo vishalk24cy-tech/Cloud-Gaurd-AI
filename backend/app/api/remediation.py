@@ -23,6 +23,10 @@ from app.database.connection import db
 from pydantic import BaseModel, Field
 
 from app.middleware.auth_middleware import verify_token
+from app.services.tenant_context import (
+    TenantContext,
+    resolve_tenant_context,
+)
 
 from app.models.finding import (
     get_finding_for_account,
@@ -291,54 +295,90 @@ def _normalize_action_type(value):
     return action_type
 
 
-def _get_organization_context_from_user(current_user) -> tuple[str, str]:
-    """Resolve active tenant membership and role from the JWT-backed identity."""
-
-    if isinstance(current_user, dict):
-        user_id = (
-            current_user.get("_id")
-            or current_user.get("id")
-            or current_user.get("user_id")
-        )
-        organization_id = current_user.get("organization")
-    else:
-        user_id = (
-            getattr(current_user, "_id", None)
-            or getattr(current_user, "id", None)
-            or getattr(current_user, "user_id", None)
-        )
-        organization_id = getattr(current_user, "organization", None)
-
-    if not user_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authenticated user not found",
-        )
-
-    if not organization_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="User is not associated with an organization",
-        )
-
-    organization_id = str(organization_id).strip()
-
-    membership = db.organization_members.find_one(
-        {
-            "organization_id": organization_id,
-            "user_id": str(user_id),
-            "status": "active",
-        }
+def get_remediation_tenant_context(
+    request: Request,
+    current_user: dict = Depends(verify_token),
+) -> TenantContext:
+    target_org_id = (
+        request.headers.get("x-organization-id")
+        or request.query_params.get("organization_id")
+    )
+    return resolve_tenant_context(
+        current_user=current_user,
+        target_organization_id=target_org_id,
+        request=request,
+        database=db,
     )
 
-    if not membership:
+
+def require_remediation_analyst_or_above(
+    context: TenantContext = Depends(get_remediation_tenant_context),
+) -> TenantContext:
+    if context.role not in {"analyst", "admin", "owner"}:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have access to this organization",
+            detail="You are not authorized to perform this remediation action. Requires Analyst, Admin, or Owner role.",
+        )
+    return context
+
+
+def require_remediation_owner_or_admin(
+    context: TenantContext = Depends(get_remediation_tenant_context),
+) -> TenantContext:
+    if context.role not in {"admin", "owner"}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You are not authorized to perform this remediation action. Requires Admin or Owner role.",
+        )
+    return context
+
+
+def _get_organization_context_from_user(current_user) -> tuple[str, str]:
+    """Resolve active tenant membership and role from the JWT-backed identity."""
+    ctx = resolve_tenant_context(current_user=current_user, database=db)
+    return ctx.organization_id, ctx.role
+
+
+def _coerce_tenant_context(
+    context_or_user: Any,
+    required_role: Optional[str] = None,
+    request: Optional[Request] = None,
+) -> TenantContext:
+    if isinstance(context_or_user, TenantContext):
+        ctx = context_or_user
+    elif isinstance(context_or_user, dict):
+        target_org_id = None
+        if request is not None:
+            if hasattr(request, "headers") and hasattr(request.headers, "get"):
+                target_org_id = request.headers.get("x-organization-id")
+            if not target_org_id and hasattr(request, "query_params") and hasattr(request.query_params, "get"):
+                target_org_id = request.query_params.get("organization_id")
+        ctx = resolve_tenant_context(
+            current_user=context_or_user,
+            target_organization_id=target_org_id,
+            request=None,
+            database=db,
+        )
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Valid authentication is required.",
         )
 
-    role = _clean_text(membership.get("role") or "viewer").lower()
-    return organization_id, role
+    if required_role == "owner_or_admin":
+        if ctx.role not in {"admin", "owner"}:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You are not authorized to perform this remediation action. Requires Admin or Owner role.",
+            )
+    elif required_role == "analyst_or_above":
+        if ctx.role not in {"analyst", "admin", "owner"}:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You are not authorized to perform this remediation action. Requires Analyst, Admin, or Owner role.",
+            )
+    return ctx
+
 
 
 def _role_can_access_action(role: str, allowed_roles) -> bool:
@@ -968,7 +1008,7 @@ def _build_remediation_metadata(
 )
 def create_remediation_proposal(
     payload: CreateRemediationRequest,
-    current_user=Depends(verify_token),
+    context: TenantContext = Depends(require_remediation_analyst_or_above),
 ):
     """
     Create a secure remediation proposal.
@@ -981,9 +1021,9 @@ def create_remediation_proposal(
 
     Security guarantees:
 
-    1. Authenticated user required.
-    2. Finding ownership verified.
-    3. AWS account ownership verified.
+    1. Authenticated analyst/admin/owner required.
+    2. Finding ownership verified within organization.
+    3. AWS account ownership and connected status verified within organization.
     4. Finding/account relationship verified.
     5. Finding must be actionable.
     6. Action type must be allowlisted.
@@ -992,9 +1032,9 @@ def create_remediation_proposal(
     9. Arbitrary AWS operation payloads are rejected.
     """
 
-    user_id = _get_user_id(
-        current_user
-    )
+    ctx = _coerce_tenant_context(context, required_role="analyst_or_above")
+    user_id = ctx.user_id
+    organization_id = ctx.organization_id
 
     finding_id = _clean_text(
         payload.finding_id
@@ -1024,30 +1064,32 @@ def create_remediation_proposal(
 
     # ========================================================
     # STEP 1
-    # Verify AWS account ownership
+    # Verify AWS account ownership and connected status
     # ========================================================
 
     aws_account = get_account(
         account_id,
         user_id=user_id,
+        organization_id=organization_id,
     )
 
-    if not aws_account:
+    if not aws_account or aws_account.get("status") != "connected":
 
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="AWS account not found",
+            detail="AWS account not found or not connected",
         )
 
     # ========================================================
     # STEP 2
-    # Verify finding belongs to the user AND account
+    # Verify finding belongs to the organization AND account
     # ========================================================
 
     finding = get_finding_for_account(
         finding_id=finding_id,
         user_id=user_id,
         account_id=account_id,
+        organization_id=organization_id,
     )
 
     if not finding:
@@ -1173,6 +1215,7 @@ def create_remediation_proposal(
         # ----------------------------------------------------
 
         "user_id": user_id,
+        "organization_id": organization_id,
 
         # ----------------------------------------------------
         # Finding
@@ -1258,7 +1301,7 @@ def create_remediation_proposal(
     # Active-proposal deduplication
     # ========================================================
     # Only one active proposal is allowed for the same:
-    #   tenant + CloudGuardAI account + finding + action
+    #   tenant/organization + CloudGuardAI account + finding + action
     #
     # Historical COMPLETED / FAILED / REJECTED / CANCELLED
     # records remain available for audit and future remediation
@@ -1269,6 +1312,7 @@ def create_remediation_proposal(
 
         existing_remediation = get_active_remediation(
             user_id=user_id,
+            organization_id=organization_id,
             finding_id=finding.get("finding_id"),
             account_id=str(aws_account.get("_id")),
             action_type=action_type,
@@ -1364,16 +1408,16 @@ def list_remediations(
         le=500,
     ),
 
-    current_user=Depends(verify_token),
+    context: TenantContext = Depends(get_remediation_tenant_context),
 ):
     """
     Return remediation records belonging only to
-    the authenticated tenant.
+    the authenticated tenant/organization.
     """
 
-    user_id = _get_user_id(
-        current_user
-    )
+    ctx = _coerce_tenant_context(context)
+    user_id = ctx.user_id
+    organization_id = ctx.organization_id
 
     clean_status = (
         _clean_text(
@@ -1411,6 +1455,7 @@ def list_remediations(
 
         remediations = get_user_remediations(
             user_id=user_id,
+            organization_id=organization_id,
             status=clean_status,
             finding_id=clean_finding_id,
             account_id=clean_account_id,
@@ -1450,20 +1495,18 @@ def list_remediations(
 
 @router.get("/statistics")
 def remediation_statistics(
-    current_user=Depends(verify_token),
+    context: TenantContext = Depends(get_remediation_tenant_context),
 ):
     """
     Return customer-specific remediation statistics.
     """
 
-    user_id = _get_user_id(
-        current_user
-    )
-
     try:
 
+        ctx = _coerce_tenant_context(context)
         statistics = get_remediation_statistics(
-            user_id
+            user_id=ctx.user_id,
+            organization_id=ctx.organization_id,
         )
 
     except Exception as exc:
@@ -1495,12 +1538,14 @@ def create_remediation_action_proposal(
     action_id: str,
     payload: CreateRemediationActionRequest,
     request: Request,
-    current_user=Depends(verify_token),
+    context: TenantContext = Depends(require_remediation_analyst_or_above),
 ):
     """Create a tenant-scoped proposal for an explicitly enabled registry action."""
 
-    user_id = _get_user_id(current_user)
-    organization_id, role = _get_organization_context_from_user(current_user)
+    ctx = _coerce_tenant_context(context, required_role="analyst_or_above", request=request)
+    user_id = ctx.user_id
+    organization_id = ctx.organization_id
+    role = ctx.role
     action_id = _clean_text(action_id)
     action = get_default_engine().get_action(action_id)
 
@@ -1672,6 +1717,7 @@ def create_remediation_action_proposal(
     try:
         existing = get_active_remediation(
             user_id=user_id,
+            organization_id=organization_id,
             finding_id=finding_id,
             account_id=account_id,
             action_type=action_id,
@@ -1757,7 +1803,7 @@ def create_remediation_action_proposal(
 def create_ai_remediation_proposal_endpoint(
     payload: CreateAIRemediationProposalRequest,
     request: Request,
-    current_user=Depends(verify_token),
+    context: TenantContext = Depends(require_remediation_analyst_or_above),
 ):
     """
     Generate an AI remediation proposal for an actionable tenant finding.
@@ -1765,8 +1811,10 @@ def create_ai_remediation_proposal_endpoint(
     registry checks, RBAC authorization, and deduplication.
     Never executes or approves changes automatically.
     """
-    user_id = _get_user_id(current_user)
-    organization_id, role = _get_organization_context_from_user(current_user)
+    ctx = _coerce_tenant_context(context, required_role="analyst_or_above", request=request)
+    user_id = ctx.user_id
+    organization_id = ctx.organization_id
+    role = ctx.role
     finding_id = _clean_text(payload.finding_id)
     request_id = getattr(request.state, "request_id", None) if hasattr(request, "state") else None
 
@@ -1835,7 +1883,7 @@ def create_ai_remediation_proposal_endpoint(
 
 @router.get("/actions")
 def list_remediation_actions(
-    current_user=Depends(verify_token),
+    context: TenantContext = Depends(get_remediation_tenant_context),
 ):
     """
     Return the centralized remediation registry metadata for the current tenant.
@@ -1843,7 +1891,9 @@ def list_remediation_actions(
     This endpoint is read-only and does not execute any AWS action.
     """
 
-    organization_id, role = _get_organization_context_from_user(current_user)
+    ctx = _coerce_tenant_context(context)
+    organization_id = ctx.organization_id
+    role = ctx.role
     engine = get_default_engine()
     actions = [
         action
@@ -1862,7 +1912,7 @@ def list_remediation_actions(
 @router.get("/actions/{action_id}")
 def get_remediation_action(
     action_id: str,
-    current_user=Depends(verify_token),
+    context: TenantContext = Depends(get_remediation_tenant_context),
 ):
     """
     Return a single remediation action definition from the centralized registry.
@@ -1877,7 +1927,9 @@ def get_remediation_action(
             detail="Action ID is required",
         )
 
-    organization_id, role = _get_organization_context_from_user(current_user)
+    ctx = _coerce_tenant_context(context)
+    organization_id = ctx.organization_id
+    role = ctx.role
     engine = get_default_engine()
     action = engine.get_action(action_id)
 
@@ -1907,20 +1959,21 @@ def get_remediation_action(
 @router.get("/{remediation_id}")
 def get_single_remediation(
     remediation_id: str,
-    current_user=Depends(verify_token),
+    context: TenantContext = Depends(get_remediation_tenant_context),
 ):
     """
     Retrieve one remediation belonging to the
     authenticated customer.
     """
 
-    user_id = _get_user_id(
-        current_user
-    )
+    ctx = _coerce_tenant_context(context)
+    user_id = ctx.user_id
+    organization_id = ctx.organization_id
 
     remediation = get_remediation(
         remediation_id,
         user_id=user_id,
+        organization_id=organization_id,
     )
 
     if not remediation:
@@ -1945,12 +1998,9 @@ def get_single_remediation(
 )
 def approve_remediation(
     remediation_id: str,
-
     payload: ApproveRemediationRequest,
-
     request: Request,
-
-    current_user=Depends(verify_token),
+    context: TenantContext = Depends(require_remediation_owner_or_admin),
 ):
     """
     Approve a remediation proposal.
@@ -1964,13 +2014,15 @@ def approve_remediation(
     A future AWS executor must consume approved proposals.
     """
 
-    user_id = _get_user_id(
-        current_user
-    )
+    ctx = _coerce_tenant_context(context, required_role="owner_or_admin", request=request)
+    user_id = ctx.user_id
+    organization_id = ctx.organization_id
+    role = ctx.role
 
     remediation = get_remediation(
         remediation_id,
         user_id=user_id,
+        organization_id=organization_id,
     )
 
     if not remediation:
@@ -2007,53 +2059,22 @@ def approve_remediation(
         ACTION_IAM_DISABLE_ACCESS_KEY,
         ACTION_VPC_REMOVE_INSECURE_INGRESS,
         ACTION_RDS_DISABLE_PUBLIC_ACCESS,
+        ACTION_CLOUDTRAIL_ENABLE_LOGGING,
     }
-    organization_id = None
-    role = None
+
+    account = get_account(
+        remediation.get("account_id"),
+        user_id=user_id,
+        organization_id=organization_id,
+    )
+    if not account or account.get("status") != "connected":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Connected AWS account not found for this organization",
+        )
 
     if resource_action:
-        organization_id, role = _get_organization_context_from_user(current_user)
         action = get_default_engine().get_action(action_id)
-        if action is None or not _role_can_access_action(role, action.allowed_roles):
-            _record_remediation_audit_event(
-                user_id=user_id,
-                organization_id=organization_id,
-                event_type=EVENT_REMEDIATION_AUTHORIZATION,
-                action=f"{action.service if action else 'Remediation'} approval authorization denied",
-                action_id=action_id,
-                authorization_result="DENIED",
-                approval_state="PENDING_APPROVAL",
-                execution_state="NOT_STARTED",
-                request_id=getattr(request.state, "request_id", None),
-                remediation_id=remediation_id,
-                resource_id=(
-                    mask_iam_access_key_id(remediation.get("resource"))
-                    if action_id == ACTION_IAM_DISABLE_ACCESS_KEY
-                    else remediation.get("resource")
-                ),
-                success=False,
-            )
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You are not authorized to approve this remediation action",
-            )
-
-        if str(remediation.get("organization_id") or "") != organization_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Remediation does not belong to the active organization",
-            )
-
-        account = get_account(
-            remediation.get("account_id"),
-            user_id=user_id,
-            organization_id=organization_id,
-        )
-        if not account or account.get("status") != "connected":
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Connected AWS account not found for this organization",
-            )
 
         resource_id = _clean_text(remediation.get("resource"))
         if action_id == ACTION_EC2_STOP_INSTANCE:
@@ -2139,14 +2160,14 @@ def approve_remediation(
                 detail="Remediation AWS account does not match the connected account",
             )
     else:
-        # Recheck the source finding before approval. It may have changed
-        # since the proposal was created.
+        # Recheck the source finding before approval.
         account_id = remediation.get("account_id")
         finding_id = remediation.get("finding_id")
         finding = get_finding_for_account(
             finding_id=finding_id,
             user_id=user_id,
             account_id=account_id,
+            organization_id=organization_id,
         )
 
         if not finding:
@@ -2163,19 +2184,17 @@ def approve_remediation(
 
     updated = update_remediation_status(
         remediation_id=remediation_id,
-
         status=STATUS_APPROVED,
-
         user_id=user_id,
-
+        organization_id=organization_id,
         approved_by=user_id,
-
         approval_comment=(
             _clean_text(
                 payload.comment
             )
             or None
         ),
+        expected_status=current_status,
     )
 
     if not updated:
@@ -2188,39 +2207,37 @@ def approve_remediation(
     updated_remediation = get_remediation(
         remediation_id,
         user_id=user_id,
+        organization_id=organization_id,
     )
 
-    if resource_action:
-        action = get_default_engine().get_action(action_id)
-        _record_remediation_audit_event(
-            user_id=user_id,
-            organization_id=organization_id,
-            event_type=EVENT_REMEDIATION_APPROVED,
-            action=f"{action.service} remediation proposal approved",
-            action_id=action_id,
-            authorization_result="AUTHORIZED",
-            confirmation_state="AWAITING_EXECUTION_CONFIRMATION",
-            approval_state=STATUS_APPROVED,
-            execution_state="NOT_STARTED",
-            account_id=remediation.get("account_id"),
-            aws_account_id=remediation.get("aws_account_id"),
-            remediation_id=remediation_id,
-            resource_id=(
-                mask_iam_access_key_id(remediation.get("resource"))
-                if action_id == ACTION_IAM_DISABLE_ACCESS_KEY
-                else remediation.get("resource")
-            ),
-            request_id=getattr(request.state, "request_id", None),
-        )
+    action = get_default_engine().get_action(action_id)
+    _record_remediation_audit_event(
+        user_id=user_id,
+        organization_id=organization_id,
+        event_type=EVENT_REMEDIATION_APPROVED,
+        action=f"{action.service if action else 'Remediation'} proposal approved",
+        action_id=action_id,
+        authorization_result="AUTHORIZED",
+        confirmation_state="AWAITING_EXECUTION_CONFIRMATION",
+        approval_state=STATUS_APPROVED,
+        execution_state="NOT_STARTED",
+        account_id=remediation.get("account_id"),
+        aws_account_id=remediation.get("aws_account_id"),
+        remediation_id=remediation_id,
+        resource_id=(
+            mask_iam_access_key_id(remediation.get("resource"))
+            if action_id == ACTION_IAM_DISABLE_ACCESS_KEY
+            else remediation.get("resource")
+        ),
+        request_id=getattr(request.state, "request_id", None),
+    )
 
     return {
         "status": "success",
-
         "message": (
             "Remediation approved. "
             "No AWS changes have been executed yet."
         ),
-
         "remediation": _safe_remediation_response(updated_remediation),
     }
 
@@ -2234,18 +2251,17 @@ def approve_remediation(
 )
 def reject_remediation(
     remediation_id: str,
-
     payload: RejectRemediationRequest,
-
-    current_user=Depends(verify_token),
+    context: TenantContext = Depends(require_remediation_analyst_or_above),
 ):
     """
     Reject a remediation proposal.
     """
 
-    user_id = _get_user_id(
-        current_user
-    )
+    ctx = _coerce_tenant_context(context, required_role="analyst_or_above")
+    user_id = ctx.user_id
+    organization_id = ctx.organization_id
+    role = ctx.role
 
     reason = _clean_text(
         payload.reason
@@ -2261,6 +2277,7 @@ def reject_remediation(
     remediation = get_remediation(
         remediation_id,
         user_id=user_id,
+        organization_id=organization_id,
     )
 
     if not remediation:
@@ -2292,14 +2309,12 @@ def reject_remediation(
 
     updated = update_remediation_status(
         remediation_id=remediation_id,
-
         status=STATUS_REJECTED,
-
         user_id=user_id,
-
+        organization_id=organization_id,
         rejected_by=user_id,
-
         rejection_reason=reason,
+        expected_status=current_status,
     )
 
     if not updated:
@@ -2312,6 +2327,7 @@ def reject_remediation(
     updated_remediation = get_remediation(
         remediation_id,
         user_id=user_id,
+        organization_id=organization_id,
     )
 
     return {
@@ -2330,20 +2346,20 @@ def reject_remediation(
 )
 def cancel_remediation_proposal(
     remediation_id: str,
-
-    current_user=Depends(verify_token),
+    context: TenantContext = Depends(require_remediation_analyst_or_above),
 ):
     """
     Cancel a remediation before execution.
     """
 
-    user_id = _get_user_id(
-        current_user
-    )
+    ctx = _coerce_tenant_context(context, required_role="analyst_or_above")
+    user_id = ctx.user_id
+    organization_id = ctx.organization_id
 
     remediation = get_remediation(
         remediation_id,
         user_id=user_id,
+        organization_id=organization_id,
     )
 
     if not remediation:
@@ -2355,7 +2371,8 @@ def cancel_remediation_proposal(
 
     updated = cancel_remediation(
         remediation_id,
-        user_id,
+        user_id=user_id,
+        organization_id=organization_id,
     )
 
     if not updated:
@@ -2370,6 +2387,7 @@ def cancel_remediation_proposal(
     updated_remediation = get_remediation(
         remediation_id,
         user_id=user_id,
+        organization_id=organization_id,
     )
 
     return {
@@ -2390,7 +2408,7 @@ def execute_remediation(
     remediation_id: str,
     request: Request,
     payload: Optional[ExecuteRemediationRequest] = None,
-    current_user=Depends(verify_token),
+    context: TenantContext = Depends(require_remediation_owner_or_admin),
 ):
     """
     Execute an APPROVED remediation proposal.
@@ -2404,7 +2422,7 @@ def execute_remediation(
     The executor loads the trusted remediation record and
     associated AWS account/finding, then:
 
-        1. Verifies tenant ownership.
+        1. Verifies tenant/organization ownership.
         2. Verifies the remediation is APPROVED.
         3. Verifies the associated finding.
         4. Assumes the customer's temporary AWS role.
@@ -2417,10 +2435,7 @@ def execute_remediation(
     Approval and execution remain separate workflow steps.
     """
 
-    user_id = _get_user_id(
-        current_user
-    )
-
+    user_id = _get_user_id(context) if isinstance(context, dict) else context.user_id
     remediation_id = _clean_text(
         remediation_id
     )
@@ -2432,13 +2447,16 @@ def execute_remediation(
             detail="Remediation ID is required",
         )
 
+    org_hint = (context.get("organization") or context.get("organization_id")) if isinstance(context, dict) else context.organization_id
+
     # --------------------------------------------------------
-    # Load the proposal using tenant-scoped access.
+    # Load the proposal using organization-scoped access.
     # --------------------------------------------------------
 
     remediation = get_remediation(
         remediation_id,
         user_id=user_id,
+        organization_id=org_hint,
     )
 
     if not remediation:
@@ -2471,7 +2489,11 @@ def execute_remediation(
                 detail="This registry action is not enabled for execution",
             )
 
-        organization_id, role = _get_organization_context_from_user(current_user)
+        ctx = _coerce_tenant_context(context, required_role="owner_or_admin", request=request)
+        user_id = ctx.user_id
+        organization_id = ctx.organization_id
+        role = ctx.role
+
         if not _role_can_access_action(role, registered_action.allowed_roles):
             _record_remediation_audit_event(
                 user_id=user_id,
@@ -2976,44 +2998,59 @@ def execute_remediation(
 )
 def verify_remediation(
     remediation_id: str,
-    current_user=Depends(verify_token),
+    context: TenantContext = Depends(require_remediation_analyst_or_above),
 ):
     """
     Request a re-evaluation scan for a completed remediation.
     """
-    user_id = str(current_user.get("user_id", ""))
-    organization_id = str(current_user.get("organization_id", ""))
-    
-    if not user_id or not organization_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Valid authentication is required."
-        )
-    
-    remediation = get_remediation(remediation_id, user_id)
+    ctx = _coerce_tenant_context(context, required_role="analyst_or_above")
+    user_id = ctx.user_id
+    organization_id = ctx.organization_id
+
+    remediation = get_remediation(
+        remediation_id,
+        user_id=user_id,
+        organization_id=organization_id,
+    )
     if not remediation:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Remediation proposal not found."
+            detail="Remediation proposal not found.",
         )
-    
+
     if remediation.get("status") != STATUS_COMPLETED:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only COMPLETED remediations can be verified."
+            detail="Only COMPLETED remediations can be verified.",
         )
-    
+
     account_id = remediation.get("account_id")
     if not account_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Remediation missing account_id."
+            detail="Remediation missing account_id.",
         )
-        
+
+    account = get_account(
+        account_id,
+        user_id=user_id,
+        organization_id=organization_id,
+    )
+    if not account or account.get("status") != "connected":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Connected AWS account not found for this organization",
+        )
+
     finding_id = remediation.get("finding_id")
-    finding = get_finding_for_account(finding_id, user_id, account_id) if finding_id else None
-    aws_account_id = finding.get("aws_account_id") if finding else None
-    
+    finding = get_finding_for_account(
+        finding_id=finding_id,
+        user_id=user_id,
+        account_id=account_id,
+        organization_id=organization_id,
+    ) if finding_id else None
+    aws_account_id = finding.get("aws_account_id") if finding else account.get("aws_account_id")
+
     try:
         scan_job = create_scan_job(
             organization_id=organization_id,
@@ -3031,10 +3068,10 @@ def verify_remediation(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
-        
+
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc)
-    
+
     from app.models.remediation import remediations_collection
     remediations_collection.update_one(
         {"_id": remediation["_id"]},
@@ -3047,7 +3084,7 @@ def verify_remediation(
             }
         }
     )
-    
+
     record_remediation_event(
         user_id=user_id,
         organization_id=organization_id,
@@ -3060,7 +3097,7 @@ def verify_remediation(
             "scan_job_id": str(scan_job.get("_id") or scan_job.get("id")),
         }
     )
-    
+
     return {
         "status": "success",
         "message": "Verification scan requested.",
@@ -3077,8 +3114,7 @@ def verify_remediation(
 )
 def remove_remediation(
     remediation_id: str,
-
-    current_user=Depends(verify_token),
+    context: TenantContext = Depends(require_remediation_owner_or_admin),
 ):
     """
     Delete an unused remediation proposal.
@@ -3087,13 +3123,14 @@ def remove_remediation(
     available for auditability.
     """
 
-    user_id = _get_user_id(
-        current_user
-    )
+    ctx = _coerce_tenant_context(context, required_role="owner_or_admin")
+    user_id = ctx.user_id
+    organization_id = ctx.organization_id
 
     remediation = get_remediation(
         remediation_id,
         user_id=user_id,
+        organization_id=organization_id,
     )
 
     if not remediation:
@@ -3105,7 +3142,8 @@ def remove_remediation(
 
     deleted = delete_remediation(
         remediation_id,
-        user_id,
+        user_id=user_id,
+        organization_id=organization_id,
     )
 
     if not deleted:

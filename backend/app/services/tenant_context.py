@@ -99,6 +99,8 @@ def resolve_tenant_context(
     target_organization_id: Optional[str] = None,
     current_user: Optional[Dict[str, Any]] = None,
     request: Optional[Request] = None,
+    database: Optional[Any] = None,
+    user: Optional[Dict[str, Any]] = None,
 ) -> TenantContext:
     """
     Core resolver that validates user identity and current database membership.
@@ -113,6 +115,9 @@ def resolve_tenant_context(
     6. Caches only successfully validated contexts on request.state strictly keyed
        by (user_id, organization_id).
     """
+    if current_user is None and user is not None:
+        current_user = user
+
     if not current_user or not isinstance(current_user, dict):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -181,8 +186,9 @@ def resolve_tenant_context(
     # --------------------------------------------------------
     # 3. Query authoritative membership in MongoDB
     # --------------------------------------------------------
+    db_conn = database if database is not None else db
     try:
-        member = db.organization_members.find_one({
+        member = db_conn.organization_members.find_one({
             "organization_id": org_id,
             "user_id": user_id,
         })

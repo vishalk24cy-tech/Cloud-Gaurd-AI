@@ -3,9 +3,12 @@
 # Production / Commercial SaaS
 # ============================================================
 
+import logging
 from datetime import datetime
 from bson import ObjectId
 from bson.errors import InvalidId
+
+logger = logging.getLogger("cloudguardai.remediation")
 
 from app.database.connection import db
 from app.services.remediation.remediation_models import (
@@ -182,6 +185,97 @@ def _serialize(value):
     return value
 
 
+def _normalize_organization_id(value):
+    if value is None:
+        return None
+    val = str(value).strip()
+    return val if val else None
+
+
+def _get_trusted_account_ids_for_org(organization_id):
+    """Return string representations of AWS accounts belonging to an organization."""
+    if not organization_id:
+        return []
+    try:
+        accounts = list(db.aws_accounts.find({"organization_id": str(organization_id).strip()}, {"_id": 1}))
+        result = []
+        for acc in accounts:
+            raw_id = acc.get("_id")
+            if raw_id is not None:
+                result.append(str(raw_id))
+        return result
+    except Exception as exc:
+        logger.warning("Error fetching trusted accounts for organization %s: %s", organization_id, exc)
+        return []
+
+
+def _verify_and_backfill_legacy_remediation(remediation, organization_id):
+    """
+    Verify ownership of a legacy remediation with missing or empty organization_id.
+    Ownership is verified strictly through trusted AWS account data belonging to organization_id.
+    If ownership is verified, backfills organization_id and returns True.
+    If unverified or belongs to another organization, fails closed and returns False.
+    """
+    if not remediation or not organization_id:
+        return False
+
+    raw_org = remediation.get("organization_id")
+    if raw_org is not None and str(raw_org).strip():
+        return str(raw_org).strip() == str(organization_id).strip()
+
+    account_id = remediation.get("account_id")
+    verified = False
+
+    if account_id:
+        account_str = str(account_id).strip()
+        account_obj = _to_object_id(account_str)
+        acc_queries = [{"_id": account_str}]
+        if account_obj:
+            acc_queries.append({"_id": account_obj})
+
+        try:
+            matched_acc = db.aws_accounts.find_one({
+                "$or": acc_queries,
+                "organization_id": str(organization_id).strip(),
+            })
+            if matched_acc:
+                verified = True
+        except Exception as exc:
+            logger.warning("Error checking account ownership for legacy remediation: %s", exc)
+
+    if verified:
+        now = _utc_now()
+        try:
+            remediations_collection.update_one(
+                {"_id": remediation["_id"]},
+                {
+                    "$set": {
+                        "organization_id": str(organization_id).strip(),
+                        "updated_at": now,
+                    }
+                },
+            )
+            remediation["organization_id"] = str(organization_id).strip()
+            remediation["updated_at"] = now
+            logger.info(
+                "Backfilled organization_id=%s onto legacy remediation_id=%s",
+                organization_id,
+                remediation.get("_id"),
+            )
+            return True
+        except Exception as exc:
+            logger.error("Failed to backfill organization_id onto legacy remediation: %s", exc)
+            return False
+
+    logger.warning(
+        "Legacy remediation %s (account_id=%s) ownership could not be established for organization %s. Failing closed.",
+        remediation.get("_id"),
+        account_id,
+        organization_id,
+    )
+    return False
+
+
 def _normalize_status(status):
     if status is None:
         return None
@@ -209,7 +303,8 @@ ACTIVE_PROPOSAL_STATUSES = {
 
 
 def get_active_remediation(
-    user_id,
+    user_id=None,
+    organization_id=None,
     finding_id=None,
     account_id=None,
     action_type=None,
@@ -217,26 +312,31 @@ def get_active_remediation(
 ):
     """
     Return the existing active remediation for the same
-    tenant + account + finding + action.
+    tenant/organization + account + finding + action.
 
     Historical records (COMPLETED, FAILED, REJECTED,
     CANCELLED) are intentionally ignored so a future
     remediation cycle can create a new proposal.
     """
     user_id = _clean(user_id)
+    org_id = _normalize_organization_id(organization_id)
     finding_id = _clean(finding_id)
     account_id = _clean(account_id)
     action_type = _clean(action_type)
 
-    if not all((user_id, account_id, action_type)):
+    if not ((user_id or org_id) and account_id and action_type):
         return None
 
     query = {
-        "user_id": str(user_id),
         "account_id": str(account_id),
         "action_type": str(action_type).upper(),
         "status": {"$in": list(ACTIVE_PROPOSAL_STATUSES)},
     }
+
+    if org_id:
+        query["organization_id"] = str(org_id)
+    else:
+        query["user_id"] = str(user_id)
 
     if finding_id:
         query["finding_id"] = str(finding_id)
@@ -521,29 +621,35 @@ def create_remediation(data):
 def get_remediation(
     remediation_id,
     user_id=None,
+    organization_id=None,
 ):
     """
-    Tenant-scoped remediation lookup.
+    Tenant/organization-scoped remediation lookup.
     """
-
-    object_id = _to_object_id(
-        remediation_id
-    )
-
+    object_id = _to_object_id(remediation_id)
     if object_id is None:
         return None
 
-    query = {
-        "_id": object_id
-    }
+    if organization_id is not None:
+        org_id_str = str(organization_id).strip()
+        candidate = remediations_collection.find_one({"_id": object_id})
+        if not candidate:
+            return None
+        candidate_org = candidate.get("organization_id")
+        if candidate_org is not None and str(candidate_org).strip():
+            if str(candidate_org).strip() != org_id_str:
+                return None
+            return _serialize(candidate)
+        # Legacy record with missing or empty organization_id
+        if _verify_and_backfill_legacy_remediation(candidate, org_id_str):
+            return _serialize(candidate)
+        return None
 
+    query = {"_id": object_id}
     if user_id is not None:
         query["user_id"] = str(user_id)
 
-    remediation = remediations_collection.find_one(
-        query
-    )
-
+    remediation = remediations_collection.find_one(query)
     if not remediation:
         return None
 
@@ -555,7 +661,8 @@ def get_remediation(
 # ============================================================
 
 def get_user_remediations(
-    user_id,
+    user_id=None,
+    organization_id=None,
     status=None,
     finding_id=None,
     account_id=None,
@@ -563,47 +670,34 @@ def get_user_remediations(
     limit=100,
 ):
     """
-    Return only remediations belonging to the
-    authenticated tenant.
+    Return only remediations belonging to the authenticated tenant/organization.
     """
-
-    query = {
-        "user_id": str(user_id)
-    }
+    query = {}
+    if organization_id is not None:
+        query["organization_id"] = str(organization_id).strip()
+    elif user_id is not None:
+        query["user_id"] = str(user_id)
 
     if status:
-        clean_status = str(
-            status
-        ).strip().upper()
-
+        clean_status = str(status).strip().upper()
         if clean_status in VALID_STATUSES:
             query["status"] = clean_status
 
     if finding_id:
-        query["finding_id"] = str(
-            finding_id
-        ).strip()
+        query["finding_id"] = str(finding_id).strip()
 
     if account_id:
-        query["account_id"] = str(
-            account_id
-        ).strip()
+        query["account_id"] = str(account_id).strip()
 
     if severity:
-        query["severity"] = str(
-            severity
-        ).strip().upper()
+        query["severity"] = str(severity).strip().upper()
 
     try:
         limit = int(limit)
-
     except (TypeError, ValueError):
         limit = 100
 
-    limit = max(
-        1,
-        min(limit, 500)
-    )
+    limit = max(1, min(limit, 500))
 
     records = list(
         remediations_collection.find(query)
@@ -625,6 +719,7 @@ def update_remediation_status(
     remediation_id,
     status,
     user_id=None,
+    organization_id=None,
     approved_by=None,
     rejected_by=None,
     approval_comment=None,
@@ -635,36 +730,37 @@ def update_remediation_status(
     """
     General status update.
 
-    user_id provides tenant isolation.
+    organization_id or user_id provides tenant isolation.
 
     expected_status can be supplied for
     optimistic/atomic workflow transitions.
     """
-
-    object_id = _to_object_id(
-        remediation_id
-    )
-
+    object_id = _to_object_id(remediation_id)
     if object_id is None:
         return False
 
-    new_status = _normalize_status(
-        status
-    )
+    new_status = _normalize_status(status)
 
-    query = {
-        "_id": object_id
-    }
+    query = {"_id": object_id}
 
-    if user_id is not None:
-        query["user_id"] = str(
-            user_id
-        )
+    if organization_id is not None:
+        org_id_str = str(organization_id).strip()
+        candidate = remediations_collection.find_one({"_id": object_id})
+        if not candidate:
+            return False
+        candidate_org = candidate.get("organization_id")
+        if candidate_org is not None and str(candidate_org).strip():
+            if str(candidate_org).strip() != org_id_str:
+                return False
+        else:
+            if not _verify_and_backfill_legacy_remediation(candidate, org_id_str):
+                return False
+        query["organization_id"] = org_id_str
+    elif user_id is not None:
+        query["user_id"] = str(user_id)
 
     if expected_status is not None:
-        query["status"] = _normalize_status(
-            expected_status
-        )
+        query["status"] = _normalize_status(expected_status)
 
     now = _utc_now()
 
@@ -678,72 +774,46 @@ def update_remediation_status(
     # --------------------------------------------------------
     # Approval
     # --------------------------------------------------------
-
     if new_status == STATUS_APPROVED:
-
         update["$set"]["approved_at"] = now
-
         if approved_by is not None:
-            update["$set"]["approved_by"] = str(
-                approved_by
-            )
-
+            update["$set"]["approved_by"] = str(approved_by)
         if approval_comment is not None:
-            update["$set"]["approval_comment"] = (
-                _clean(approval_comment)
-            )
+            update["$set"]["approval_comment"] = _clean(approval_comment)
 
     # --------------------------------------------------------
     # Rejection
     # --------------------------------------------------------
-
     if new_status == STATUS_REJECTED:
-
         update["$set"]["rejected_at"] = now
-
         if rejected_by is not None:
-            update["$set"]["rejected_by"] = str(
-                rejected_by
-            )
-
+            update["$set"]["rejected_by"] = str(rejected_by)
         if rejection_reason is not None:
-            update["$set"]["rejection_reason"] = (
-                _clean(rejection_reason)
-            )
+            update["$set"]["rejection_reason"] = _clean(rejection_reason)
 
     # --------------------------------------------------------
     # Execution start
     # --------------------------------------------------------
-
     if new_status == STATUS_EXECUTING:
-
         update["$set"]["started_at"] = now
-
         update["$set"]["execution_error"] = None
 
     # --------------------------------------------------------
     # Execution completed
     # --------------------------------------------------------
-
     if new_status == STATUS_COMPLETED:
-
         update["$set"]["completed_at"] = now
-
         update["$set"]["execution_error"] = None
 
     # --------------------------------------------------------
     # Execution failed
     # --------------------------------------------------------
-
     if new_status == STATUS_FAILED:
-
-        update["$set"]["execution_error"] = (
-            _clean(execution_error)
-        )
+        update["$set"]["execution_error"] = _clean(execution_error)
 
     result = remediations_collection.update_one(
         query,
-        update
+        update,
     )
 
     return result.modified_count > 0
@@ -1081,31 +1151,45 @@ def reconcile_successful_execution(
 
 def cancel_remediation(
     remediation_id,
-    user_id,
+    user_id=None,
+    organization_id=None,
 ):
     """
     Cancel a remediation before execution.
     """
-
-    object_id = _to_object_id(
-        remediation_id
-    )
-
+    object_id = _to_object_id(remediation_id)
     if object_id is None:
         return False
 
-    result = remediations_collection.update_one(
-        {
-            "_id": object_id,
-            "user_id": str(user_id),
-            "status": {
-                "$in": [
-                    STATUS_PROPOSED,
-                    STATUS_PENDING_APPROVAL,
-                    STATUS_APPROVED,
-                ]
-            },
+    query = {
+        "_id": object_id,
+        "status": {
+            "$in": [
+                STATUS_PROPOSED,
+                STATUS_PENDING_APPROVAL,
+                STATUS_APPROVED,
+            ]
         },
+    }
+
+    if organization_id is not None:
+        org_id_str = str(organization_id).strip()
+        candidate = remediations_collection.find_one({"_id": object_id})
+        if not candidate:
+            return False
+        candidate_org = candidate.get("organization_id")
+        if candidate_org is not None and str(candidate_org).strip():
+            if str(candidate_org).strip() != org_id_str:
+                return False
+        else:
+            if not _verify_and_backfill_legacy_remediation(candidate, org_id_str):
+                return False
+        query["organization_id"] = org_id_str
+    elif user_id is not None:
+        query["user_id"] = str(user_id)
+
+    result = remediations_collection.update_one(
+        query,
         {
             "$set": {
                 "status": STATUS_CANCELLED,
@@ -1123,7 +1207,8 @@ def cancel_remediation(
 
 def delete_remediation(
     remediation_id,
-    user_id,
+    user_id=None,
+    organization_id=None,
 ):
     """
     Delete only non-executed proposal records.
@@ -1131,28 +1216,39 @@ def delete_remediation(
     Completed/failed/executing records are retained
     for auditability.
     """
-
-    object_id = _to_object_id(
-        remediation_id
-    )
-
+    object_id = _to_object_id(remediation_id)
     if object_id is None:
         return False
 
-    result = remediations_collection.delete_one(
-        {
-            "_id": object_id,
-            "user_id": str(user_id),
-            "status": {
-                "$in": [
-                    STATUS_PROPOSED,
-                    STATUS_PENDING_APPROVAL,
-                    STATUS_REJECTED,
-                    STATUS_CANCELLED,
-                ]
-            },
-        }
-    )
+    query = {
+        "_id": object_id,
+        "status": {
+            "$in": [
+                STATUS_PROPOSED,
+                STATUS_PENDING_APPROVAL,
+                STATUS_REJECTED,
+                STATUS_CANCELLED,
+            ]
+        },
+    }
+
+    if organization_id is not None:
+        org_id_str = str(organization_id).strip()
+        candidate = remediations_collection.find_one({"_id": object_id})
+        if not candidate:
+            return False
+        candidate_org = candidate.get("organization_id")
+        if candidate_org is not None and str(candidate_org).strip():
+            if str(candidate_org).strip() != org_id_str:
+                return False
+        else:
+            if not _verify_and_backfill_legacy_remediation(candidate, org_id_str):
+                return False
+        query["organization_id"] = org_id_str
+    elif user_id is not None:
+        query["user_id"] = str(user_id)
+
+    result = remediations_collection.delete_one(query)
 
     return result.deleted_count > 0
 
@@ -1162,86 +1258,37 @@ def delete_remediation(
 # ============================================================
 
 def get_remediation_statistics(
-    user_id,
+    user_id=None,
+    organization_id=None,
 ):
     """
-    Tenant-scoped remediation statistics.
+    Tenant/organization-scoped remediation statistics.
     """
+    base_query = {}
+    if organization_id is not None:
+        base_query["organization_id"] = str(organization_id).strip()
+    elif user_id is not None:
+        base_query["user_id"] = str(user_id)
+    else:
+        return {}
 
-    user_id = str(user_id)
+    total = remediations_collection.count_documents(base_query)
 
-    total = remediations_collection.count_documents(
-        {
-            "user_id": user_id
-        }
-    )
-
-    proposed = remediations_collection.count_documents(
-        {
-            "user_id": user_id,
-            "status": STATUS_PROPOSED,
-        }
-    )
-
-    pending_approval = remediations_collection.count_documents(
-        {
-            "user_id": user_id,
-            "status": STATUS_PENDING_APPROVAL,
-        }
-    )
-
-    approved = remediations_collection.count_documents(
-        {
-            "user_id": user_id,
-            "status": STATUS_APPROVED,
-        }
-    )
-
-    executing = remediations_collection.count_documents(
-        {
-            "user_id": user_id,
-            "status": STATUS_EXECUTING,
-        }
-    )
-
-    completed = remediations_collection.count_documents(
-        {
-            "user_id": user_id,
-            "status": STATUS_COMPLETED,
-        }
-    )
-
-    failed = remediations_collection.count_documents(
-        {
-            "user_id": user_id,
-            "status": STATUS_FAILED,
-        }
-    )
-
-    rejected = remediations_collection.count_documents(
-        {
-            "user_id": user_id,
-            "status": STATUS_REJECTED,
-        }
-    )
-
-    cancelled = remediations_collection.count_documents(
-        {
-            "user_id": user_id,
-            "status": STATUS_CANCELLED,
-        }
-    )
+    def count_status(s):
+        q = dict(base_query)
+        q["status"] = s
+        return remediations_collection.count_documents(q)
 
     return {
         "total": total,
-        "proposed": proposed,
-        "pending_approval": pending_approval,
-        "approved": approved,
-        "executing": executing,
-        "completed": completed,
-        "failed": failed,
-        "rejected": rejected,
-        "cancelled": cancelled,
+        "proposed": count_status(STATUS_PROPOSED),
+        "pending_approval": count_status(STATUS_PENDING_APPROVAL),
+        "approved": count_status(STATUS_APPROVED),
+        "executing": count_status(STATUS_EXECUTING),
+        "completed": count_status(STATUS_COMPLETED),
+        "failed": count_status(STATUS_FAILED),
+        "rejected": count_status(STATUS_REJECTED),
+        "cancelled": count_status(STATUS_CANCELLED),
     }
 
 
@@ -1254,6 +1301,7 @@ def mark_remediation_scan_verified(
     scan_id,
     verified_at=None,
     user_id=None,
+    organization_id=None,
 ):
     """
     Record authoritative scan verification on the exact remediation proposal.
@@ -1264,7 +1312,21 @@ def mark_remediation_scan_verified(
 
     now = verified_at or _utc_now()
     query = {"_id": object_id}
-    if user_id is not None:
+
+    if organization_id is not None:
+        org_id_str = str(organization_id).strip()
+        candidate = remediations_collection.find_one({"_id": object_id})
+        if not candidate:
+            return False
+        candidate_org = candidate.get("organization_id")
+        if candidate_org is not None and str(candidate_org).strip():
+            if str(candidate_org).strip() != org_id_str:
+                return False
+        else:
+            if not _verify_and_backfill_legacy_remediation(candidate, org_id_str):
+                return False
+        query["organization_id"] = org_id_str
+    elif user_id is not None:
         query["user_id"] = str(user_id)
 
     result = remediations_collection.update_one(
@@ -1292,13 +1354,10 @@ def ensure_indexes():
 
     Safe to call multiple times.
     """
-
     try:
-
         # ----------------------------------------------------
         # User + created_at
         # ----------------------------------------------------
-
         remediations_collection.create_index(
             [
                 ("user_id", 1),
@@ -1308,13 +1367,31 @@ def ensure_indexes():
         )
 
         # ----------------------------------------------------
+        # Organization + created_at
+        # ----------------------------------------------------
+        remediations_collection.create_index(
+            [
+                ("organization_id", 1),
+                ("created_at", -1),
+            ],
+            name="org_created_at",
+        )
+
+        # ----------------------------------------------------
+        # Organization + status + created_at
+        # ----------------------------------------------------
+        remediations_collection.create_index(
+            [
+                ("organization_id", 1),
+                ("status", 1),
+                ("created_at", -1),
+            ],
+            name="org_status_created_at",
+        )
+
+        # ----------------------------------------------------
         # User + status + created_at
         # ----------------------------------------------------
-        # IMPORTANT:
-        # MongoDB already has this index under the name
-        # user_status_created_at.
-        # ----------------------------------------------------
-
         remediations_collection.create_index(
             [
                 ("user_id", 1),
@@ -1327,7 +1404,6 @@ def ensure_indexes():
         # ----------------------------------------------------
         # User + finding
         # ----------------------------------------------------
-
         remediations_collection.create_index(
             [
                 ("user_id", 1),
@@ -1339,7 +1415,6 @@ def ensure_indexes():
         # ----------------------------------------------------
         # User + account
         # ----------------------------------------------------
-
         remediations_collection.create_index(
             [
                 ("user_id", 1),
@@ -1349,9 +1424,8 @@ def ensure_indexes():
         )
 
         # ----------------------------------------------------
-        # Active deduplication lookup
+        # Active deduplication lookup (User)
         # ----------------------------------------------------
-
         remediations_collection.create_index(
             [
                 ("user_id", 1),
@@ -1362,6 +1436,21 @@ def ensure_indexes():
                 ("created_at", -1),
             ],
             name="active_remediation_lookup",
+        )
+
+        # ----------------------------------------------------
+        # Active deduplication lookup (Organization)
+        # ----------------------------------------------------
+        remediations_collection.create_index(
+            [
+                ("organization_id", 1),
+                ("account_id", 1),
+                ("finding_id", 1),
+                ("action_type", 1),
+                ("status", 1),
+                ("created_at", -1),
+            ],
+            name="active_remediation_lookup_org",
         )
 
         # ----------------------------------------------------

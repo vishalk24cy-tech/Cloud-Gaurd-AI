@@ -4,7 +4,7 @@ import time
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -68,8 +68,10 @@ DEFAULT_CORS_ORIGINS = [
 ]
 _frontend_url = os.getenv("FRONTEND_URL", "").strip()
 CORS_ORIGINS = DEFAULT_CORS_ORIGINS.copy()
-if _frontend_url and _frontend_url not in CORS_ORIGINS:
-    CORS_ORIGINS.append(_frontend_url)
+if _frontend_url:
+    for origin in [u.strip() for u in _frontend_url.split(",") if u.strip()]:
+        if origin not in CORS_ORIGINS:
+            CORS_ORIGINS.append(origin)
 
 
 # ============================================================
@@ -1042,3 +1044,42 @@ def test_db():
         "status": "success",
         "message": "MongoDB Connected Successfully"
     }
+
+
+# ============================================================
+# HEALTH & READINESS PROBES
+# ============================================================
+
+@app.get("/health", tags=["Health"])
+def health_liveness():
+    """
+    Lightweight liveness probe for orchestrators and load balancers.
+    Fails closed only if the web server process itself is non-responsive.
+    """
+    return {
+        "status": "healthy",
+        "service": "cloudguardai-api",
+        "version": "1.0.0",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.get("/health/ready", tags=["Health"])
+def health_readiness():
+    """
+    Readiness probe validating database connectivity safely.
+    Fails closed with HTTP 503 without leaking internal stack traces or connection strings.
+    """
+    try:
+        db.command("ping")
+        return {
+            "status": "ready",
+            "service": "cloudguardai-api",
+            "database": "connected",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception:
+        raise HTTPException(
+            status_code=503,
+            detail="Service dependencies unavailable",
+        )

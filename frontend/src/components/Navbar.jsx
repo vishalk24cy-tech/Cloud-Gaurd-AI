@@ -5,6 +5,11 @@ function Navbar() {
 
   const logout = () => {
     localStorage.removeItem("token");
+    localStorage.removeItem("access_token");
+    localStorage.removeItem("accessToken");
+    localStorage.removeItem("jwt");
+    localStorage.removeItem("user");
+    localStorage.removeItem("organization_id");
     navigate("/");
   };
 

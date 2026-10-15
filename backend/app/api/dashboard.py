@@ -19,13 +19,14 @@ router = APIRouter()
 # ============================================================
 
 
+@router.get("")
 @router.get("/")
 def dashboard(
     current_user=Depends(verify_token)
 ):
 
     # ========================================================
-    # GET USER ID
+    # GET USER ID & ORGANIZATION
     # ========================================================
 
     user_id = str(
@@ -34,6 +35,13 @@ def dashboard(
         or current_user.get("user_id")
         or ""
     )
+
+    organization_id = (
+        current_user.get("organization")
+        or current_user.get("organization_id")
+    )
+    if organization_id:
+        organization_id = str(organization_id).strip()
 
     if not user_id:
 
@@ -96,7 +104,8 @@ def dashboard(
             "findings": 1,
             "scan_time": 1,
         },
-        limit=20
+        limit=20,
+        organization_id=organization_id,
     )
 
 

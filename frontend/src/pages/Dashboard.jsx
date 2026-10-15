@@ -239,7 +239,21 @@ function Dashboard() {
         ? accountsResponse.data.accounts
         : [];
 
-      const latestScan = historyData[0];
+      let latestScan = historyData[0];
+
+      if (latestScan && (!getScanFindings(latestScan) || getScanFindings(latestScan).length === 0) && (latestScan._id || latestScan.id)) {
+        try {
+          const scanId = latestScan._id || latestScan.id;
+          const detailRes = await api.get(`/cloud/history/${scanId}`);
+          const detailedScan = detailRes.data?.scan || detailRes.data?.data || detailRes.data;
+          if (detailedScan) {
+            latestScan = { ...latestScan, ...detailedScan };
+            historyData[0] = latestScan;
+          }
+        } catch (detailErr) {
+          console.warn("Could not load full scan details for dashboard:", detailErr);
+        }
+      }
 
       setDashboard(dashboardResponse.data);
       setHistory(historyData);

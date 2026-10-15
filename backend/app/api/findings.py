@@ -111,6 +111,7 @@ def _normalize_account_id(value):
     return account_id
 
 
+@router.get("")
 @router.get("/")
 def list_findings(
     status: Optional[str] = Query(default=None),

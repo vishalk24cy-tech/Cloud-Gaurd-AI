@@ -37,7 +37,10 @@ import DashboardLayout from "./layouts/DashboardLayout";
 function PrivateRoute({ children }) {
 
   const token =
-    localStorage.getItem("token");
+    localStorage.getItem("token") ||
+    localStorage.getItem("access_token") ||
+    localStorage.getItem("accessToken") ||
+    localStorage.getItem("jwt");
 
   if (!token) {
 
@@ -88,6 +91,11 @@ function App() {
 
         <Route
           path="/"
+          element={<Login />}
+        />
+
+        <Route
+          path="/login"
           element={<Login />}
         />
 

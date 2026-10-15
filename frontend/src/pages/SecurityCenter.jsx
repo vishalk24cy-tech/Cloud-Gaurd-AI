@@ -22,7 +22,17 @@ function SecurityCenter() {
       const scans = response.data || [];
 
       if (scans.length > 0) {
-        const latestScan = scans[0];
+        let latestScan = scans[0];
+
+        if ((!Array.isArray(latestScan.findings) || latestScan.findings.length === 0) && (latestScan._id || latestScan.id)) {
+          try {
+            const scanId = latestScan._id || latestScan.id;
+            const detailRes = await api.get(`/cloud/history/${scanId}`);
+            latestScan = detailRes.data?.scan || detailRes.data?.data || detailRes.data || latestScan;
+          } catch (e) {
+            console.warn("Could not fetch full scan details for SecurityCenter:", e);
+          }
+        }
 
         setScan(latestScan);
         setFindings(latestScan.findings || []);

@@ -520,6 +520,7 @@ def _build_graph_result(
 # Full Security Graph
 # ============================================================
 
+@router.get("")
 @router.get("/")
 def security_graph(
     account_id: Optional[str] = Query(

@@ -1383,6 +1383,7 @@ def create_remediation_proposal(
 # LIST REMEDIATIONS
 # ============================================================
 
+@router.get("")
 @router.get("/")
 def list_remediations(
     status_filter: Optional[str] = Query(

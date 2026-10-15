@@ -422,7 +422,9 @@ function Remediation() {
     setSuccess("");
 
     try {
-      const response = await api.post(`/remediation/${id}/execute`);
+      const response = await api.post(`/remediation/${id}/execute`, {
+        confirmed: true,
+      });
       const result = response?.data?.remediation;
 
       if (

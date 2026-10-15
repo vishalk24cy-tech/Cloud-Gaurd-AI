@@ -227,6 +227,7 @@ def _persist_framework_snapshots(
     return errors
 
 
+@router.get("")
 @router.get("/")
 def compliance_dashboard(
     account_id: Optional[str] = Query(default=None),

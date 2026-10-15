@@ -67,11 +67,30 @@ function Findings() {
       const latestScan = scans[0];
       setAccountId(latestScan?.account_id || latestScan?.scan?.account_id || null);
 
-      const scanFindings =
+      let scanFindings =
         latestScan?.findings ||
         latestScan?.scan?.findings ||
         latestScan?.result?.findings ||
         [];
+
+      // If findings are not included in lightweight history projection, load full scan details
+      if ((!Array.isArray(scanFindings) || scanFindings.length === 0) && (latestScan?._id || latestScan?.id)) {
+        try {
+          const scanId = latestScan._id || latestScan.id;
+          const detailRes = await api.get(`/cloud/history/${scanId}`);
+          const detailedScan = detailRes.data?.scan || detailRes.data?.data || detailRes.data;
+          scanFindings =
+            detailedScan?.findings ||
+            detailedScan?.scan?.findings ||
+            detailedScan?.result?.findings ||
+            [];
+          if (!latestScan?.account_id && (detailedScan?.account_id || detailedScan?.scan?.account_id)) {
+            setAccountId(detailedScan.account_id || detailedScan.scan?.account_id);
+          }
+        } catch (detailErr) {
+          console.warn("Could not load detailed scan findings:", detailErr);
+        }
+      }
 
       if (Array.isArray(scanFindings)) {
         setFindings(

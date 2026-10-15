@@ -659,6 +659,15 @@ def execute_s3_bucket_action(
             message="AWS Account not found in current organization context.",
         )
 
+    account_status = _safe_string(aws_account.get("status")).lower()
+    if account_status != "connected":
+        raise S3ControlExecutionError(
+            status_code=400,
+            code="ACCOUNT_NOT_CONNECTED",
+            category="ACCOUNT_VALIDATION",
+            message=f"AWS account is not connected (status: '{account_status or 'unknown'}'). Action rejected.",
+        )
+
     # 5b. Verify organization remediation setting for S3
     from app.models.remediation_settings import is_remediation_enabled
     if not is_remediation_enabled(organization_id, clean_account_id, "s3"):

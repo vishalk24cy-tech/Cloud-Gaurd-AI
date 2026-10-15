@@ -1101,7 +1101,6 @@ def execute_security_group_control(
     # Fetch connected AWS Account
     aws_account = get_account(
         account_id,
-        user_id=user_id,
         organization_id=organization_id,
     )
     if not aws_account:
@@ -1110,6 +1109,15 @@ def execute_security_group_control(
             code="AWS_ACCOUNT_NOT_FOUND",
             category="ACCOUNT_NOT_FOUND",
             message="Connected AWS account not found for this organization.",
+        )
+
+    account_status = _safe_string(aws_account.get("status")).lower()
+    if account_status != "connected":
+        raise NetworkControlExecutionError(
+            status_code=400,
+            code="ACCOUNT_NOT_CONNECTED",
+            category="ACCOUNT_VALIDATION",
+            message=f"AWS account is not connected (status: '{account_status or 'unknown'}'). Action rejected.",
         )
 
     # Verify organization remediation setting for VPC / Security Groups

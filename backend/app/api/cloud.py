@@ -103,6 +103,10 @@ from app.models.finding import (
 )
 
 from app.middleware.auth_middleware import verify_token
+from app.services.tenant_context import (
+    TenantContext,
+    resolve_tenant_context,
+)
 
 from app.services.audit_log_service import (
     record_failure as record_audit_failure,
@@ -194,6 +198,75 @@ def _safe_string(value):
         return ""
 
     return str(value).strip()
+
+
+def _coerce_cloud_tenant_context(
+    current_user: Any,
+    required_role: Optional[str] = None,
+) -> TenantContext:
+    """
+    Validates authenticated user identity, active tenant membership, and role authorization
+    for cloud control operations using shared tenant context and RBAC.
+
+    Guarantees:
+    - User identity and organization are resolved strictly from verified server-side identity (current_user).
+    - Ignores client request headers, query params, or body fields for organization override (request=None).
+    - Enforces active membership via db.organization_members.
+    - Rejects restricted or non-active statuses (inactive, revoked, suspended, removed) fail-closed.
+    - Rejects missing, invalid, or unsupported roles fail-closed.
+    - If required_role == 'owner_or_admin', requires role in ('owner', 'admin') with a safe 403.
+    """
+    if isinstance(current_user, TenantContext):
+        ctx = current_user
+    elif isinstance(current_user, dict):
+        user_id = _safe_string(
+            current_user.get("_id")
+            or current_user.get("user_id")
+            or current_user.get("id")
+        )
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Authentication required.")
+
+        trusted_org = _safe_string(
+            current_user.get("organization") or current_user.get("organization_id")
+        )
+        if not trusted_org:
+            raise HTTPException(status_code=403, detail="Organization context is required.")
+
+        try:
+            ctx = resolve_tenant_context(
+                target_organization_id=trusted_org,
+                current_user=current_user,
+                request=None,
+            )
+        except HTTPException as exc:
+            if exc.status_code == 500:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Internal error resolving organization membership.",
+                ) from exc
+            raise
+    else:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+
+    if not ctx.organization_id:
+        raise HTTPException(status_code=403, detail="Organization context is required.")
+
+    role = str(ctx.role or "").strip().lower()
+    if not role or role not in ("owner", "admin", "analyst", "viewer"):
+        raise HTTPException(
+            status_code=403,
+            detail="Invalid or unsupported organization role. Access denied.",
+        )
+
+    if required_role == "owner_or_admin":
+        if role not in ("owner", "admin"):
+            raise HTTPException(
+                status_code=403,
+                detail="You must have an Admin or Owner role to perform this action.",
+            )
+
+    return ctx
 
 
 def _get_service(finding):
@@ -1016,84 +1089,7 @@ def control_ec2_instance(
             or ""
         )
 
-    user_id = str(current_user.get("_id") or current_user.get("id") or "")
-    organization_id = _safe_string(current_user.get("organization"))
-    if not organization_id:
-        logger.warning(
-            "[REQ:%s] EC2 control authorization rejected (403): Missing organization context for user_id=%s",
-            request_id or "N/A",
-            user_id,
-        )
-        raise HTTPException(
-            status_code=403,
-            detail="Organization context is required.",
-        )
-
-    # Determine user role within organization
-    try:
-        from app.database.connection import db
-        member = db.organization_members.find_one({
-            "organization_id": organization_id,
-            "user_id": user_id,
-        })
-        
-        if not member:
-            logger.warning(
-                "[REQ:%s] EC2 control authorization rejected (403): Membership document not found in org_id=%s for user_id=%s",
-                request_id or "N/A",
-                organization_id,
-                user_id,
-            )
-            raise HTTPException(
-                status_code=403,
-                detail="Organization membership not found. Access denied."
-            )
-            
-        status = _safe_string(member.get("status")).lower()
-        if status in ("inactive", "revoked", "suspended", "removed"):
-            logger.warning(
-                "[REQ:%s] EC2 control authorization rejected (403): Membership status '%s' is restricted in org_id=%s for user_id=%s",
-                request_id or "N/A",
-                status,
-                organization_id,
-                user_id,
-            )
-            raise HTTPException(
-                status_code=403,
-                detail=f"Organization membership is {status}. Access denied."
-            )
-            
-        if status != "active":
-            logger.warning(
-                "[REQ:%s] EC2 control authorization rejected (403): Membership status '%s' is not active in org_id=%s for user_id=%s",
-                request_id or "N/A",
-                status,
-                organization_id,
-                user_id,
-            )
-            raise HTTPException(
-                status_code=403,
-                detail="Organization membership is not active. Access denied."
-            )
-            
-        role = _safe_string(member.get("role")).lower()
-        if not role:
-            role = "viewer"
-            
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.error(
-            "[REQ:%s] Error resolving organization membership for user_id=%s in org_id=%s: %s",
-            request_id or "N/A",
-            user_id,
-            organization_id,
-            exc,
-        )
-        raise HTTPException(
-            status_code=500,
-            detail="Internal error resolving organization membership."
-        )
+    ctx = _coerce_cloud_tenant_context(current_user)
 
     try:
         result = execute_ec2_instance_action(
@@ -1102,9 +1098,9 @@ def control_ec2_instance(
             action=payload.action,
             region=payload.region,
             confirmed=payload.confirmed,
-            user_id=user_id,
-            organization_id=organization_id,
-            role=role or "viewer",
+            user_id=ctx.user_id,
+            organization_id=ctx.organization_id,
+            role=ctx.role,
             request_id=request_id or None,
         )
         return result
@@ -1115,8 +1111,8 @@ def control_ec2_instance(
             err.status_code,
             err.code,
             err.public_message,
-            user_id,
-            organization_id,
+            ctx.user_id,
+            ctx.organization_id,
         )
         raise HTTPException(
             status_code=err.status_code,
@@ -1323,52 +1319,7 @@ def control_s3_bucket(
     - Pre-state and post-state transition validation
     - Tamper-evident audit logging
     """
-    user_id = str(current_user.get("_id") or current_user.get("id") or "")
-    organization_id = _safe_string(current_user.get("organization"))
-    if not organization_id:
-        raise HTTPException(
-            status_code=403,
-            detail="Organization context is required.",
-        )
-
-    # Determine user role within organization
-    try:
-        from app.database.connection import db
-        member = db.organization_members.find_one({
-            "organization_id": organization_id,
-            "user_id": user_id,
-        })
-        
-        if not member:
-            raise HTTPException(
-                status_code=403,
-                detail="Organization membership not found. Access denied."
-            )
-            
-        status = _safe_string(member.get("status")).lower()
-        if status in ("inactive", "revoked", "suspended"):
-            raise HTTPException(
-                status_code=403,
-                detail=f"Organization membership is {status}. Access denied."
-            )
-            
-        if status != "active":
-            raise HTTPException(
-                status_code=403,
-                detail="Organization membership is not active. Access denied."
-            )
-            
-        role = _safe_string(member.get("role")).lower()
-        if not role:
-            role = "viewer"
-            
-    except HTTPException:
-        raise
-    except Exception:
-        raise HTTPException(
-            status_code=500,
-            detail="Internal error resolving organization membership."
-        )
+    ctx = _coerce_cloud_tenant_context(current_user)
 
     try:
         result = execute_s3_bucket_action(
@@ -1377,9 +1328,9 @@ def control_s3_bucket(
             action=payload.action,
             region=payload.region,
             confirmed=payload.confirmed,
-            user_id=user_id,
-            organization_id=organization_id,
-            role=role or "viewer",
+            user_id=ctx.user_id,
+            organization_id=ctx.organization_id,
+            role=ctx.role,
         )
         return result
     except S3ControlExecutionError as err:
@@ -1697,52 +1648,7 @@ def control_rds_instance(
     - Server-side pre-state and post-state transition validation
     - Tamper-evident audit logging
     """
-    user_id = str(current_user.get("_id") or current_user.get("id") or "")
-    organization_id = _safe_string(current_user.get("organization"))
-    if not organization_id:
-        raise HTTPException(
-            status_code=403,
-            detail="Organization context is required.",
-        )
-
-    # Determine user role within organization
-    try:
-        from app.database.connection import db
-        member = db.organization_members.find_one({
-            "organization_id": organization_id,
-            "user_id": user_id,
-        })
-        
-        if not member:
-            raise HTTPException(
-                status_code=403,
-                detail="Organization membership not found. Access denied."
-            )
-            
-        status = _safe_string(member.get("status")).lower()
-        if status in ("inactive", "revoked", "suspended"):
-            raise HTTPException(
-                status_code=403,
-                detail=f"Organization membership is {status}. Access denied."
-            )
-            
-        if status != "active":
-            raise HTTPException(
-                status_code=403,
-                detail="Organization membership is not active. Access denied."
-            )
-            
-        role = _safe_string(member.get("role")).lower()
-        if not role:
-            role = "viewer"
-            
-    except HTTPException:
-        raise
-    except Exception:
-        raise HTTPException(
-            status_code=500,
-            detail="Internal error resolving organization membership."
-        )
+    ctx = _coerce_cloud_tenant_context(current_user)
 
     try:
         result = execute_rds_instance_action(
@@ -1751,9 +1657,9 @@ def control_rds_instance(
             action=payload.action,
             region=payload.region,
             confirmed=payload.confirmed,
-            user_id=user_id,
-            organization_id=organization_id,
-            role=role or "viewer",
+            user_id=ctx.user_id,
+            organization_id=ctx.organization_id,
+            role=ctx.role,
         )
         return result
     except RDSControlExecutionError as err:
@@ -2144,60 +2050,15 @@ def control_security_group(
     Execute audited, post-verified, safety-checked security group rule mutations.
     Requires Owner or Admin role, explicit confirmation, and valid rule target.
     """
-    user_id = str(current_user["_id"])
-    organization_id = _safe_string(current_user.get("organization"))
-    if not organization_id:
-        raise HTTPException(
-            status_code=403,
-            detail="Organization context is required.",
-        )
-
-    # Determine user role within organization
-    try:
-        from app.database.connection import db
-        member = db.organization_members.find_one({
-            "organization_id": organization_id,
-            "user_id": user_id,
-        })
-        
-        if not member:
-            raise HTTPException(
-                status_code=403,
-                detail="Organization membership not found. Access denied."
-            )
-            
-        status = _safe_string(member.get("status")).lower()
-        if status in ("inactive", "revoked", "suspended"):
-            raise HTTPException(
-                status_code=403,
-                detail=f"Organization membership is {status}. Access denied."
-            )
-            
-        if status != "active":
-            raise HTTPException(
-                status_code=403,
-                detail="Organization membership is not active. Access denied."
-            )
-            
-        role = _safe_string(member.get("role")).lower()
-        if not role:
-            role = "viewer"
-            
-    except HTTPException:
-        raise
-    except Exception:
-        raise HTTPException(
-            status_code=500,
-            detail="Internal error resolving organization membership."
-        )
+    ctx = _coerce_cloud_tenant_context(current_user)
 
     try:
         result = execute_security_group_control(
             account_id=account_id,
             group_id=group_id,
-            user_id=user_id,
-            organization_id=organization_id,
-            user_role=role or "viewer",
+            user_id=ctx.user_id,
+            organization_id=ctx.organization_id,
+            user_role=ctx.role,
             action=payload.action,
             region=payload.region,
             rule_spec=payload.rule_spec,
@@ -3342,48 +3203,7 @@ def control_iam_resource(
     """
     Securely execute IAM security controls on a connected AWS account.
     """
-    user_id = str(current_user.get("_id") or current_user.get("id") or "")
-    organization_id = _safe_string(current_user.get("organization"))
-    if not organization_id:
-        raise HTTPException(status_code=403, detail="Organization context is required.")
-
-    try:
-        from app.database.connection import db
-        member = db.organization_members.find_one({
-            "organization_id": organization_id,
-            "user_id": user_id,
-        })
-        
-        if not member:
-            raise HTTPException(
-                status_code=403,
-                detail="Organization membership not found. Access denied."
-            )
-            
-        status = _safe_string(member.get("status")).lower()
-        if status in ("inactive", "revoked", "suspended"):
-            raise HTTPException(
-                status_code=403,
-                detail=f"Organization membership is {status}. Access denied."
-            )
-            
-        if status != "active":
-            raise HTTPException(
-                status_code=403,
-                detail="Organization membership is not active. Access denied."
-            )
-            
-        role = _safe_string(member.get("role")).lower()
-        if not role:
-            role = "viewer"
-            
-    except HTTPException:
-        raise
-    except Exception:
-        raise HTTPException(
-            status_code=500,
-            detail="Internal error resolving organization membership."
-        )
+    ctx = _coerce_cloud_tenant_context(current_user)
 
     try:
         result = execute_iam_action(
@@ -3393,9 +3213,9 @@ def control_iam_resource(
             action=payload.action,
             parameters=payload.parameters,
             confirmed=payload.confirmed,
-            user_id=user_id,
-            organization_id=organization_id,
-            role=role or "viewer",
+            user_id=ctx.user_id,
+            organization_id=ctx.organization_id,
+            role=ctx.role,
         )
         return result
     except IAMControlExecutionError as err:

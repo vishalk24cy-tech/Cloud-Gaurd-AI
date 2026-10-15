@@ -222,6 +222,15 @@ def execute_iam_action(
             message="Connected AWS Account not found or belongs to another organization.",
         )
 
+    account_status = _safe_string(aws_account.get("status")).lower()
+    if account_status != "connected":
+        raise IAMControlExecutionError(
+            status_code=400,
+            code="ACCOUNT_NOT_CONNECTED",
+            category="ACCOUNT_VALIDATION",
+            message=f"AWS account is not connected (status: '{account_status or 'unknown'}'). Action rejected.",
+        )
+
     # Verify organization remediation setting for IAM
     from app.models.remediation_settings import is_remediation_enabled
     if not is_remediation_enabled(organization_id, clean_account_id, "iam"):

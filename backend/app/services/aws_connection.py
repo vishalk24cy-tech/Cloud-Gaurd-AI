@@ -29,6 +29,7 @@ def assume_aws_role(
     role_arn: str,
     region: str = DEFAULT_REGION,
     session_name: str = "CloudGuardAI-Scanner",
+    external_id: str = None,
 ):
     """
     Assume an AWS IAM role and return a temporary boto3 Session.
@@ -40,6 +41,7 @@ def assume_aws_role(
         role_arn: IAM Role ARN to assume.
         region: Default AWS region.
         session_name: STS session name.
+        external_id: Cryptographic ExternalId to guard against confused deputy attacks.
 
     Returns:
         boto3.Session
@@ -69,14 +71,19 @@ def assume_aws_role(
         )
 
         # ----------------------------------------------------
-        # Assume customer role
+        # Assume customer role with ExternalId condition
         # ----------------------------------------------------
 
-        response = sts_client.assume_role(
-            RoleArn=role_arn,
-            RoleSessionName=session_name,
-            DurationSeconds=3600,
-        )
+        assume_kwargs = {
+            "RoleArn": role_arn,
+            "RoleSessionName": session_name,
+            "DurationSeconds": 3600,
+        }
+
+        if external_id and str(external_id).strip():
+            assume_kwargs["ExternalId"] = str(external_id).strip()
+
+        response = sts_client.assume_role(**assume_kwargs)
 
         credentials = response.get("Credentials")
 
@@ -287,3 +294,82 @@ def verify_aws_account(
         )
 
     return identity
+
+
+# ============================================================
+# VERIFY AWS ROLE CONNECTION (PRE-FLIGHT STS HANDSHAKE)
+# ============================================================
+
+def verify_aws_role_connection(
+    role_arn: str,
+    expected_account_id: str,
+    external_id: str = None,
+    region: str = DEFAULT_REGION,
+) -> dict:
+    """
+    Perform a secure pre-flight verification of an AWS role connection:
+    1. Validates role_arn format.
+    2. Validates expected_account_id format.
+    3. Assumes the role via STS AssumeRole using the external_id.
+    4. Calls STS GetCallerIdentity.
+    5. Confirms caller identity account matches expected_account_id.
+    6. Returns sanitized identity metadata without exposing credentials or internal secrets.
+    """
+    if not role_arn or not isinstance(role_arn, str) or not role_arn.strip().startswith("arn:aws:iam::"):
+        raise ValueError("Invalid AWS IAM role ARN. Must start with 'arn:aws:iam::'.")
+
+    expected_acc = str(expected_account_id or "").strip()
+    if not expected_acc or len(expected_acc) != 12 or not expected_acc.isdigit():
+        raise ValueError("Invalid AWS account ID. Must be a 12-digit number.")
+
+    try:
+        session = assume_aws_role(
+            role_arn=role_arn,
+            region=region,
+            session_name="CloudGuardAI-PreflightVerification",
+            external_id=external_id,
+        )
+    except Exception as exc:
+        cause = getattr(exc, "__cause__", None) or exc
+        code = ""
+        if isinstance(cause, ClientError):
+            code = cause.response.get("Error", {}).get("Code", "")
+        elif isinstance(exc, ClientError):
+            code = exc.response.get("Error", {}).get("Code", "")
+        elif "AccessDenied" in str(exc):
+            code = "AccessDenied"
+        elif "InvalidParameter" in str(exc) or "ValidationError" in str(exc):
+            code = "InvalidParameter"
+        elif "ExpiredToken" in str(exc):
+            code = "ExpiredToken"
+
+        if code in ("AccessDenied", "AccessDeniedException"):
+            raise PermissionError(
+                "AWS STS AssumeRole access denied. Verify that the IAM role trust policy grants "
+                "sts:AssumeRole to CloudGuardAI and requires the matching ExternalId condition."
+            ) from exc
+        if code in ("InvalidParameter", "InvalidParameterValue", "ValidationError"):
+            raise ValueError("Invalid IAM role ARN or parameter configuration.") from exc
+        if code in ("ExpiredToken", "ExpiredTokenException"):
+            raise PermissionError("AWS credentials or STS session token expired.") from exc
+
+        exc_str = f"{str(exc)} {str(cause)}".lower()
+        if "timeout" in exc_str or "timed out" in exc_str:
+            raise TimeoutError("AWS STS connection timed out. Check network connectivity and region.") from exc
+        if isinstance(exc, (ValueError, PermissionError)):
+            raise
+        raise RuntimeError("AWS STS role assumption failed. Verify role ARN and permissions.") from exc
+
+    try:
+        identity = verify_aws_account(session, expected_acc)
+    except PermissionError:
+        raise
+    except Exception as exc:
+        raise RuntimeError("Unable to verify AWS account identity via STS GetCallerIdentity.") from exc
+
+    return {
+        "verified": True,
+        "account_id": identity.get("Account"),
+        "arn": identity.get("Arn"),
+        "user_id": identity.get("UserId"),
+    }

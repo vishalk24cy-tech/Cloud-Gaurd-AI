@@ -974,6 +974,7 @@ def list_ec2_instances(
         session = assume_aws_role(
             role_arn,
             region=target_region,
+            external_id=aws_account.get("external_id"),
         )
     except Exception as assume_err:
         logger.warning(
@@ -1219,6 +1220,7 @@ def list_s3_buckets(
         session = assume_aws_role(
             role_arn,
             region=target_region or "us-east-1",
+            external_id=aws_account.get("external_id"),
         )
     except Exception as assume_err:
         logger.warning(
@@ -1444,6 +1446,7 @@ def list_rds_instances(
         session = assume_aws_role(
             role_arn,
             region=target_region,
+            external_id=aws_account.get("external_id"),
         )
     except Exception as assume_err:
         logger.warning(
@@ -1582,7 +1585,11 @@ def list_rds_clusters(
         )
 
     try:
-        session = assume_aws_role(role_arn, region=target_region)
+        session = assume_aws_role(
+            role_arn,
+            region=target_region,
+            external_id=aws_account.get("external_id"),
+        )
         verify_aws_account(session, stored_aws_account_id)
     except PermissionError as perm_err:
         raise HTTPException(status_code=403, detail=str(perm_err))
@@ -1733,7 +1740,11 @@ def _resolve_network_account_and_client(
         )
 
     try:
-        session = assume_aws_role(role_arn, region=target_region)
+        session = assume_aws_role(
+            role_arn,
+            region=target_region,
+            external_id=aws_account.get("external_id"),
+        )
     except Exception as assume_err:
         logger.warning("Network role assumption failed account_id=%s: %s", clean_account_id, assume_err)
         raise HTTPException(
@@ -2187,7 +2198,8 @@ def scan_aws(
 
         session = assume_aws_role(
             aws_account["role_arn"],
-            aws_account["region"]
+            aws_account["region"],
+            external_id=aws_account.get("external_id"),
         )
 
         # ====================================================
@@ -3161,7 +3173,11 @@ def list_iam_inventory(
         raise HTTPException(status_code=400, detail="AWS account is missing configured role_arn.")
 
     try:
-        session = assume_aws_role(role_arn, region="us-east-1")
+        session = assume_aws_role(
+            role_arn,
+            region="us-east-1",
+            external_id=aws_account.get("external_id"),
+        )
         verify_aws_account(session, stored_aws_account_id)
     except PermissionError as perm_err:
         raise HTTPException(status_code=403, detail=str(perm_err))

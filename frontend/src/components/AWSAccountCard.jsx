@@ -13,7 +13,37 @@ function AWSAccountCard({
 
   const [scanningId, setScanningId] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
+  const [verifyingId, setVerifyingId] = useState(null);
   const [error, setError] = useState("");
+
+  // ==========================================
+  // VERIFY AWS CONNECTION
+  // ==========================================
+
+  const verifyConnection = async (accountId) => {
+    try {
+      setError("");
+      setVerifyingId(accountId);
+      await api.post(`/aws/account/${accountId}/test-connection`);
+      alert("✅ AWS Connection Verified Successfully");
+      if (onRefresh) {
+        await onRefresh();
+      }
+    } catch (err) {
+      console.error("AWS Verification Error:", err);
+      const message =
+        err.response?.data?.detail ||
+        err.response?.data?.message ||
+        "AWS connection verification failed.";
+      setError(message);
+      alert("❌ " + message);
+      if (onRefresh) {
+        await onRefresh();
+      }
+    } finally {
+      setVerifyingId(null);
+    }
+  };
 
 
   // ==========================================
@@ -381,10 +411,30 @@ function AWSAccountCard({
 
                   <div className="aws-account-actions">
 
+                    {account.status !== "connected" && (
+                      <button
+                        className="aws-verify-button"
+                        disabled={
+                          verifyingId === account._id ||
+                          scanningId === account._id ||
+                          deletingId === account._id
+                        }
+                        onClick={() =>
+                          verifyConnection(account._id)
+                        }
+                      >
+                        {
+                          verifyingId === account._id
+                            ? "Verifying..."
+                            : "Verify STS"
+                        }
+                      </button>
+                    )}
 
                     <button
                       className="aws-scan-button"
                       disabled={
+                        verifyingId === account._id ||
                         scanningId === account._id ||
                         deletingId === account._id
                       }

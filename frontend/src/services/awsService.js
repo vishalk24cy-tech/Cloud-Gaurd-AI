@@ -59,13 +59,33 @@ export const deleteAWSAccount = async (accountId) => {
 
 
 // ============================================================
+// GET AWS SETUP INTENT (EXTERNAL ID & TRUST POLICY TEMPLATE)
+// ============================================================
+
+export const getAWSSetupIntent = async () => {
+    const response = await api.get("/aws/setup-intent");
+    return response.data;
+};
+
+
+// ============================================================
+// TEST AWS CONNECTION (PRE-FLIGHT STS VERIFICATION)
+// ============================================================
+
+export const testAWSConnection = async (accountId) => {
+    const response = await api.post(`/aws/account/${accountId}/test-connection`);
+    return response.data;
+};
+
+
+// ============================================================
 // RUN AWS SECURITY SCAN
 // ============================================================
 
 export const scanAWS = async (accountId) => {
 
     const response = await api.get(
-        `/aws/scan/${accountId}`,
+        `/cloud/aws/scan/${accountId}`,
         {
             timeout: 120000
         }
@@ -360,4 +380,4 @@ export const controlIAMResource = async (
     );
 
     return response.data;
-};
+};

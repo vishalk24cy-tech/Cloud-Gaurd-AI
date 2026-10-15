@@ -1,12 +1,18 @@
-from fastapi import APIRouter, HTTPException, Depends
+import os
+from fastapi import APIRouter, HTTPException, Depends, Request
 
 from app.models.aws_account import (
     create_aws_account,
     get_organization_accounts,
     get_account,
-    delete_account
+    delete_account,
+    generate_external_id,
+    verify_external_id_binding,
+    update_account_verification,
+    ensure_external_id,
 )
 
+from app.services.aws_connection import verify_aws_role_connection
 from app.middleware.auth_middleware import verify_token
 from app.database.connection import db
 
@@ -54,6 +60,66 @@ def get_active_membership(current_user):
         )
 
     return membership
+
+
+# ============================================================
+# AWS SETUP INTENT (OBTAIN EXTERNAL ID & TRUST POLICY TEMPLATE)
+# ============================================================
+
+@router.get("/setup-intent")
+def get_aws_setup_intent(
+    current_user=Depends(verify_token)
+):
+    """
+    Return a cryptographically secure, unpredictable ExternalId bound strictly
+    to the caller's active organization, along with the required IAM trust policy template.
+
+    Security guarantees:
+    - Enforces active organization membership
+    - Restricted to Owner and Admin roles (Viewers/Analysts rejected 403)
+    - ExternalId cannot be forged or cross-used across tenants
+    - ExternalId is never exposed on unauthenticated/public endpoints or logs
+    """
+    membership = get_active_membership(current_user)
+    role = membership.get("role", "viewer")
+    if role not in {"owner", "admin"}:
+        raise HTTPException(
+            status_code=403,
+            detail="Only organization owners and admins can initiate AWS connection setup."
+        )
+
+    organization_id = str(membership["organization_id"])
+    external_id = generate_external_id(organization_id)
+
+    cloudguard_account_id = os.getenv("CLOUDGUAARDAI_AWS_ACCOUNT_ID", "123456789012")
+
+    return {
+        "status": "success",
+        "organization_id": organization_id,
+        "external_id": external_id,
+        "trust_policy_template": {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Principal": {
+                        "AWS": f"arn:aws:iam::{cloudguard_account_id}:root"
+                    },
+                    "Action": "sts:AssumeRole",
+                    "Condition": {
+                        "StringEquals": {
+                            "sts:ExternalId": external_id
+                        }
+                    }
+                }
+            ]
+        },
+        "instructions": {
+            "step_1": "Create an IAM Role in your AWS account with CloudGuardAI read-only permissions.",
+            "step_2": "In the IAM Role Trust Policy, require sts:AssumeRole with the ExternalId condition below.",
+            "step_3": "Register the role ARN and AWS Account ID in CloudGuardAI, then execute test-connection."
+        }
+    }
 
 
 # ============================================================
@@ -192,6 +258,29 @@ def connect_aws_account(
             "message": "AWS Account Connected Successfully",
             "account": account
         }
+
+    except ValueError as error:
+
+        if (
+            reservation
+            and reservation.get("reserved")
+        ):
+
+            try:
+
+                release_usage(
+                    organization_id=organization_id,
+                    usage_field="aws_accounts_used",
+                    amount=1
+                )
+
+            except Exception:
+                pass
+
+        raise HTTPException(
+            status_code=400,
+            detail=str(error)
+        )
 
     except Exception as error:
 
@@ -366,3 +455,113 @@ def remove_account(
     return {
         "message": "AWS Account removed successfully"
     }
+
+
+# ============================================================
+# TEST AWS CONNECTION (PRE-FLIGHT STS HANDSHAKE & VERIFICATION)
+# ============================================================
+
+@router.post("/account/{account_id}/test-connection")
+@router.post("/account/{account_id}/verify")
+def test_aws_account_connection(
+    account_id: str,
+    current_user=Depends(verify_token)
+):
+    """
+    Perform pre-flight verification on a connected AWS account:
+    1. Authenticate user and verify active organization membership.
+    2. Enforce Owner or Admin RBAC permissions.
+    3. Verify account ownership within the organization tenant.
+    4. Retrieve the stored ExternalId (or safely backfill for legacy accounts).
+    5. Perform STS AssumeRole using the exact stored ExternalId.
+    6. Verify sts:GetCallerIdentity account matches the registered account ID.
+    7. Update account status to 'connected' on success, or 'failed' with safe error message on failure.
+    """
+    membership = get_active_membership(current_user)
+    role = membership.get("role", "viewer")
+    if role not in {"owner", "admin"}:
+        raise HTTPException(
+            status_code=403,
+            detail="Only organization owners and admins can verify AWS account connections."
+        )
+
+    organization_id = str(membership["organization_id"])
+
+    account = get_account(
+        account_id,
+        organization_id=organization_id
+    )
+    if not account:
+        raise HTTPException(
+            status_code=404,
+            detail="AWS Account not found."
+        )
+
+    role_arn = account.get("role_arn")
+    aws_account_id = account.get("aws_account_id")
+    region = account.get("region", "ap-south-1")
+    external_id = account.get("external_id")
+
+    if not external_id:
+        external_id = ensure_external_id(account_id, organization_id=organization_id)
+
+    try:
+        identity = verify_aws_role_connection(
+            role_arn=role_arn,
+            expected_account_id=aws_account_id,
+            external_id=external_id,
+            region=region,
+        )
+
+        update_account_verification(
+            account_id=account_id,
+            status="connected",
+            organization_id=organization_id,
+        )
+
+        return {
+            "status": "success",
+            "verified": True,
+            "account_status": "connected",
+            "message": "AWS connection verified successfully.",
+            "account_id": account_id,
+            "aws_account_id": aws_account_id,
+            "identity": {
+                "arn": identity.get("arn"),
+                "account": identity.get("account_id"),
+                "user_id": identity.get("user_id"),
+            }
+        }
+
+    except (PermissionError, ValueError, TimeoutError, RuntimeError) as exc:
+        error_message = str(exc)
+        update_account_verification(
+            account_id=account_id,
+            status="failed",
+            verification_error=error_message,
+            organization_id=organization_id,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=error_message,
+        )
+
+
+# ============================================================
+# SCAN ROUTE COMPATIBILITY ALIAS
+# ============================================================
+
+@router.get("/scan/{account_id}")
+def scan_aws_alias(
+    account_id: str,
+    current_user=Depends(verify_token)
+):
+    """
+    Backward-compatibility alias forwarding /aws/scan/{account_id}
+    to the cloud scanner endpoint (/cloud/aws/scan/{account_id}).
+    """
+    from app.api.cloud import scan_aws
+    return scan_aws(
+        account_id=account_id,
+        current_user=current_user
+    )

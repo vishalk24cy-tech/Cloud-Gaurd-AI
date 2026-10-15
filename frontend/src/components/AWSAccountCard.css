@@ -154,6 +154,28 @@
   gap: 10px;
 }
 
+.aws-verify-button {
+  padding: 10px 14px;
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  color: var(--accent-bright);
+  font-weight: 700;
+  font-size: 13px;
+  border-radius: var(--radius-md);
+  transition: all var(--duration) ease;
+}
+
+.aws-verify-button:hover:not(:disabled) {
+  background: rgba(16, 185, 129, 0.22);
+  border-color: rgba(16, 185, 129, 0.5);
+  transform: translateY(-2px);
+}
+
+.aws-verify-button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
 .aws-scan-button {
   flex: 1;
   padding: 10px;

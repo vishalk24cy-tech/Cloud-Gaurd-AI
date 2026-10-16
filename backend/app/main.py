@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 import os
 import threading
 import time
@@ -647,10 +648,11 @@ def _stop_background_scan_worker():
 # ============================================================
 # STARTUP
 # ============================================================
+# LIFESPAN (STARTUP & SHUTDOWN)
+# ============================================================
 
-@app.on_event("startup")
-def startup_event():
-
+@asynccontextmanager
+async def lifespan(app_instance: FastAPI):
     print(
         "[STARTUP] CloudGuardAI environment: "
         f"{APP_ENV}"
@@ -671,145 +673,73 @@ def startup_event():
     # --------------------------------------------------------
     # Monitoring scheduler
     # --------------------------------------------------------
-
     try:
-
         start_scheduler()
-
-        print(
-            "[OK] Monitoring scheduler started"
-        )
-
+        print("[OK] Monitoring scheduler started")
     except Exception as exc:
-
-        print(
-            "[WARNING] Monitoring scheduler "
-            f"unavailable: {type(exc).__name__}: {exc}"
-        )
+        print(f"[WARNING] Monitoring scheduler unavailable: {type(exc).__name__}: {exc}")
 
     # --------------------------------------------------------
     # Audit indexes
     # --------------------------------------------------------
-
     try:
-
         from app.models.audit_log import ensure_indexes
-
         ensure_indexes()
-
-        print(
-            "[OK] Audit indexes initialized"
-        )
-
+        print("[OK] Audit indexes initialized")
     except Exception as exc:
-
-        print(
-            "[WARNING] Audit indexes unavailable: "
-            f"{type(exc).__name__}: {exc}"
-        )
+        print(f"[WARNING] Audit indexes unavailable: {type(exc).__name__}: {exc}")
 
     # --------------------------------------------------------
     # Remediation indexes
     # --------------------------------------------------------
-
     try:
-
         from app.models.remediation import ensure_indexes as ensure_remediation_indexes
-
         ensure_remediation_indexes()
-
-        print(
-            "[OK] Remediation indexes initialized"
-        )
-
+        print("[OK] Remediation indexes initialized")
     except Exception as exc:
-
-        print(
-            "[WARNING] Remediation indexes unavailable: "
-            f"{type(exc).__name__}: {exc}"
-        )
+        print(f"[WARNING] Remediation indexes unavailable: {type(exc).__name__}: {exc}")
 
     # --------------------------------------------------------
     # Organization usage indexes
     # --------------------------------------------------------
-
     try:
-
         from app.services.organization_usage_service import (
             initialize_usage_indexes
         )
-
         initialize_usage_indexes()
-
-        print(
-            "[OK] Organization usage indexes initialized"
-        )
-
+        print("[OK] Organization usage indexes initialized")
     except Exception as exc:
-
-        print(
-            "[WARNING] Organization usage indexes unavailable: "
-            f"{type(exc).__name__}: {exc}"
-        )
+        print(f"[WARNING] Organization usage indexes unavailable: {type(exc).__name__}: {exc}")
 
     # --------------------------------------------------------
     # Scan Job indexes
     # --------------------------------------------------------
-
     try:
-
         from app.services.scan_job_service import (
             initialize_scan_job_indexes
         )
-
         initialize_scan_job_indexes()
-
-        print(
-            "[OK] Scan job indexes initialized"
-        )
-
+        print("[OK] Scan job indexes initialized")
     except Exception as exc:
+        print(f"[WARNING] Scan job indexes unavailable: {type(exc).__name__}: {exc}")
 
-        print(
-            "[WARNING] Scan job indexes unavailable: "
-            f"{type(exc).__name__}: {exc}"
-        )
+    print("[OK] Background scan worker disabled (using standalone worker process)")
+
+    yield
 
     # --------------------------------------------------------
-    # Background scan worker
+    # Shutdown
     # --------------------------------------------------------
-    #
-    # IMPORTANT:
-    # Do NOT start the scan worker inside FastAPI.
-    #
-    # The standalone worker process is responsible for this:
-    #
-    #     python worker.py
-    #
-
-    print(
-        "[OK] Background scan worker disabled "
-        "(using standalone worker process)"
-    )
-
-
-# ============================================================
-# SHUTDOWN
-# ============================================================
-
-@app.on_event("shutdown")
-def shutdown_event():
-
     try:
-
         _stop_background_scan_worker()
-
     except Exception as exc:
-
         print(
             "[WARNING] Background scan worker shutdown "
             f"error: {type(exc).__name__}: {exc}"
         )
+
+
+app.router.lifespan_context = lifespan
 
 
 # ============================================================

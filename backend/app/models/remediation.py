@@ -4,7 +4,7 @@
 # ============================================================
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from bson import ObjectId
 from bson.errors import InvalidId
 
@@ -104,7 +104,7 @@ VALID_ACTION_TYPES = {
 # ============================================================
 
 def _utc_now():
-    return datetime.utcnow()
+    return datetime.now(timezone.utc)
 
 
 def _to_object_id(value):

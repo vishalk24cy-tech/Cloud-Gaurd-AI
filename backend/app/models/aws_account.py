@@ -2,7 +2,7 @@ import hashlib
 import hmac
 import os
 import secrets
-from datetime import datetime
+from datetime import datetime, timezone
 
 from bson import ObjectId
 from bson.errors import InvalidId
@@ -60,7 +60,7 @@ def _to_object_id(account_id):
 
 
 def create_aws_account(data):
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     organization_id = data.get("organization_id")
 
@@ -285,7 +285,7 @@ def update_account_status(
         {
             "$set": {
                 "status": status,
-                "updated_at": datetime.utcnow()
+                "updated_at": datetime.now(timezone.utc)
             }
         }
     )
@@ -316,7 +316,7 @@ def update_last_connected(
     if organization_id is not None:
         query["organization_id"] = str(organization_id)
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     result = aws_accounts_collection.update_one(
         query,
@@ -355,7 +355,7 @@ def update_last_scan(
     if organization_id is not None:
         query["organization_id"] = str(organization_id)
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     result = aws_accounts_collection.update_one(
         query,
@@ -421,7 +421,7 @@ def update_account_verification(
     if organization_id is not None:
         query["organization_id"] = str(organization_id)
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     update_doc = {
         "status": status,
         "verification_error": verification_error,
@@ -466,6 +466,6 @@ def ensure_external_id(account_id, organization_id=None):
     new_external_id = generate_external_id(org_id)
     aws_accounts_collection.update_one(
         {"_id": object_id},
-        {"$set": {"external_id": new_external_id, "updated_at": datetime.utcnow()}}
+        {"$set": {"external_id": new_external_id, "updated_at": datetime.now(timezone.utc)}}
     )
     return new_external_id

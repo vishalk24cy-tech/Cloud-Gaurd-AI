@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
 from bson import ObjectId
@@ -33,7 +33,7 @@ DEFAULT_DEDUP_COOLDOWN_MINUTES = 60
 # ============================================================
 
 def _utc_now() -> datetime:
-    return datetime.utcnow()
+    return datetime.now(timezone.utc)
 
 
 def _safe_object_id(value: str) -> Optional[ObjectId]:

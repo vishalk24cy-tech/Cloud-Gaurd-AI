@@ -461,7 +461,7 @@ def enrich_findings_with_relationships(findings, inventory):
         graph.setdefault("lateral_movement", False)
         graph.setdefault("attack_path_score", 0)
         graph.setdefault("attack_path", [])
-        graph["graph_updated_at"] = datetime.utcnow()
+        graph["graph_updated_at"] = datetime.now(timezone.utc)
         finding["security_graph"] = graph
         out.append(finding)
 

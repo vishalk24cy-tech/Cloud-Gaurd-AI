@@ -4,7 +4,7 @@
 # ============================================================
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from bson import ObjectId
 from bson.errors import InvalidId
@@ -309,7 +309,7 @@ def _build_graph_metadata(data, now=None):
     ``security_graph`` object. That nested object is merged here so the
     data survives the finding model's persistence/upsert boundary.
     """
-    now = now or datetime.utcnow()
+    now = now or datetime.now(timezone.utc)
 
     nested_graph = data.get("security_graph")
     if not isinstance(nested_graph, dict):
@@ -570,7 +570,7 @@ def _verify_and_backfill_legacy_finding(finding, organization_id):
                 logger.warning("Error checking scan job ownership for legacy finding: %s", exc)
 
     if verified:
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         try:
             findings_collection.update_one(
                 {"_id": finding["_id"]},
@@ -644,7 +644,7 @@ def create_finding(data, user_id, organization_id=None):
     Every finding belongs to exactly one tenant/user.
     """
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     organization_id = _normalize_organization_id(
         organization_id or data.get("organization_id")
@@ -867,7 +867,7 @@ def upsert_finding(data, user_id, organization_id=None):
     Customer workflow is preserved between scans.
     """
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     organization_id = _normalize_organization_id(
         organization_id or data.get("organization_id")
@@ -1497,7 +1497,7 @@ def update_finding_status(
         organization_id=organization_id,
     )
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     update_fields = {
         "status": status,
@@ -1582,7 +1582,7 @@ def assign_finding(
 
     update_fields = {
         "assigned_to": assigned_to,
-        "updated_at": datetime.utcnow(),
+        "updated_at": datetime.now(timezone.utc),
     }
     if organization_id:
         update_fields["organization_id"] = organization_id
@@ -1624,7 +1624,7 @@ def update_finding_notes(
 
     update_fields = {
         "notes": notes,
-        "updated_at": datetime.utcnow(),
+        "updated_at": datetime.now(timezone.utc),
     }
     if organization_id:
         update_fields["organization_id"] = organization_id
@@ -1664,8 +1664,8 @@ def update_last_seen(
     )
 
     update_fields = {
-        "last_seen": datetime.utcnow(),
-        "updated_at": datetime.utcnow(),
+        "last_seen": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
     }
     if organization_id:
         update_fields["organization_id"] = organization_id

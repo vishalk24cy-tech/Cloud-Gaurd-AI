@@ -762,7 +762,7 @@ def _build_relationship_evidence(source, **extra):
     evidence = {
         "source": "AWS_API_RELATIONSHIP_ENRICHMENT",
         "verified": True,
-        "retrieved_at": datetime.utcnow().isoformat() + "Z",
+        "retrieved_at": datetime.now(timezone.utc).isoformat(),
         "source_api": source,
     }
     evidence.update({
@@ -891,7 +891,7 @@ def _build_scan_security_graph(relationship_inventory, findings=None):
         "relationship_count": len(relationships),
         "attack_paths": [],
         "attack_path_count": 0,
-        "generated_at": datetime.utcnow(),
+        "generated_at": datetime.now(timezone.utc),
     }
 
 
@@ -2468,7 +2468,7 @@ def scan_aws(
     current_user=Depends(verify_token)
 ):
 
-    scan_started_at = datetime.utcnow()
+    scan_started_at = datetime.now(timezone.utc)
 
     try:
 
@@ -2886,7 +2886,7 @@ def scan_aws(
         # SCAN TIME
         # ====================================================
 
-        scan_time = datetime.utcnow()
+        scan_time = datetime.now(timezone.utc)
 
         # ====================================================
         # FINDINGS
@@ -2956,7 +2956,7 @@ def scan_aws(
         # SCAN COMPLETION TIME
         # ====================================================
 
-        scan_completed_at = datetime.utcnow()
+        scan_completed_at = datetime.now(timezone.utc)
 
         # ====================================================
         # SCAN-LEVEL SECURITY GRAPH SNAPSHOT

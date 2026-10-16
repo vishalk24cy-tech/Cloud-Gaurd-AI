@@ -19,7 +19,7 @@
 #   Evidence + Remediation
 # ============================================================
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 # ============================================================
@@ -809,7 +809,7 @@ def _build_control_result(
         "evidence": evidence,
         "evidence_confidence": _evidence_confidence(finding),
         "recommendation": recommendation,
-        "evaluated_at": datetime.utcnow(),
+        "evaluated_at": datetime.now(timezone.utc),
     }
 
 
@@ -1406,5 +1406,5 @@ def calculate_compliance(
             "empty_evidence_status": STATUS_NOT_ASSESSED,
         },
 
-        "generated_at": datetime.utcnow(),
+        "generated_at": datetime.now(timezone.utc),
     }

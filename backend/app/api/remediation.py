@@ -4,7 +4,7 @@
 # Secure Proposal Workflow
 # ============================================================
 
-from typing import Optional
+from typing import Any, Dict, List, Optional
 import re
 
 from fastapi.responses import JSONResponse
@@ -113,6 +113,7 @@ from app.services.ai_remediation_proposer import (
     AIRemediationNotFoundError,
     AIRemediationServiceError,
     AIRemediationValidationError,
+    batch_propose_ai_remediations,
     propose_ai_remediation,
 )
 
@@ -220,6 +221,10 @@ class CreateRemediationActionRequest(BaseModel):
 
 class CreateAIRemediationProposalRequest(BaseModel):
     finding_id: str = Field(..., min_length=1, max_length=200)
+
+
+class CreateBatchAIRemediationProposalsRequest(BaseModel):
+    finding_ids: List[str] = Field(..., min_length=1, max_length=25)
 
 
 class ExecuteRemediationRequest(BaseModel):
@@ -1879,6 +1884,65 @@ def create_ai_remediation_proposal_endpoint(
     return {
         **result,
         "remediation": _safe_remediation_response(result.get("remediation")),
+    }
+
+
+@router.post("/ai-proposals/batch", status_code=status.HTTP_200_OK)
+def create_batch_ai_remediation_proposals_endpoint(
+    payload: CreateBatchAIRemediationProposalsRequest,
+    request: Request,
+    context: TenantContext = Depends(require_remediation_analyst_or_above),
+):
+    """
+    Generate AI remediation proposals for a batch of actionable findings (up to 25).
+    Runs concurrent evaluation with deterministic validation, registry checks,
+    RBAC authorization, and deduplication.
+    Never executes or approves changes automatically.
+    """
+    ctx = _coerce_tenant_context(context, required_role="analyst_or_above", request=request)
+    user_id = ctx.user_id
+    organization_id = ctx.organization_id
+    role = ctx.role
+    request_id = getattr(request.state, "request_id", None) if hasattr(request, "state") else None
+
+    try:
+        batch_result = batch_propose_ai_remediations(
+            finding_ids=payload.finding_ids,
+            user_id=user_id,
+            organization_id=organization_id,
+            role=role,
+            request_id=request_id,
+        )
+    except AIRemediationValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from None
+    except AIRemediationAuthorizationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        ) from None
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unexpected error occurred while generating batch AI proposals",
+        ) from None
+
+    # Sanitize any remediation objects within results
+    safe_results = []
+    for item in batch_result.get("results", []):
+        if "remediation" in item and item["remediation"] is not None:
+            safe_results.append({
+                **item,
+                "remediation": _safe_remediation_response(item["remediation"]),
+            })
+        else:
+            safe_results.append(item)
+
+    return {
+        **batch_result,
+        "results": safe_results,
     }
 
 

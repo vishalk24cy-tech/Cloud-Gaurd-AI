@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   AlertTriangle,
   Check,
@@ -10,6 +10,7 @@ import {
   X,
 } from "lucide-react";
 import api from "../services/api";
+import { createBatchAIRemediationProposals } from "../services/remediationService";
 import FindingRemediation from "../components/FindingRemediation";
 import "./Findings.css";
 
@@ -21,12 +22,64 @@ function Findings() {
   const [selectedFinding, setSelectedFinding] = useState(null);
   const [accountId, setAccountId] = useState(null);
 
+  const navigate = useNavigate();
   const [search, setSearch] = useState(() => searchParams.get("search") || "");
   const [severity, setSeverity] = useState("ALL");
   const [service, setService] = useState("ALL");
   const [resource, setResource] = useState("ALL");
   const [status, setStatus] = useState("ALL");
   const [sortBy, setSortBy] = useState("severity");
+
+  const [selectedFindingIds, setSelectedFindingIds] = useState(new Set());
+  const [batchAiLoading, setBatchAiLoading] = useState(false);
+  const [batchAiResult, setBatchAiResult] = useState(null);
+
+  const toggleSelectFinding = (findingId) => {
+    setSelectedFindingIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(findingId)) {
+        next.delete(findingId);
+      } else {
+        if (next.size >= 25) {
+          return next;
+        }
+        next.add(findingId);
+      }
+      return next;
+    });
+  };
+
+  const toggleSelectAllVisible = () => {
+    if (selectedFindingIds.size > 0) {
+      setSelectedFindingIds(new Set());
+    } else {
+      const ids = filteredFindings
+        .map((f) => f.finding_id || f.id)
+        .filter(Boolean)
+        .slice(0, 25);
+      setSelectedFindingIds(new Set(ids));
+    }
+  };
+
+  const handleBatchProposeAI = async () => {
+    const ids = Array.from(selectedFindingIds);
+    if (!ids.length) return;
+    setBatchAiLoading(true);
+    try {
+      const res = await createBatchAIRemediationProposals(ids);
+      setBatchAiResult(res);
+      setSelectedFindingIds(new Set());
+    } catch (err) {
+      setBatchAiResult({
+        error:
+          err?.response?.data?.detail ||
+          err?.message ||
+          "Failed to generate batch AI proposals",
+      });
+    } finally {
+      setBatchAiLoading(false);
+    }
+  };
 
   // ============================================================
   // LOAD FINDINGS FROM LATEST SCAN
@@ -605,6 +658,41 @@ function Findings() {
       </div>
 
       {/* ======================================================
+          BATCH ACTIONS BAR
+      ====================================================== */}
+
+      {selectedFindingIds.size > 0 && (
+        <div className="findings-batch-bar" role="region" aria-label="Batch actions">
+          <div className="batch-info">
+            <span className="batch-sparkle">✨</span>
+            <span>
+              <strong>{selectedFindingIds.size}</strong> finding{selectedFindingIds.size > 1 ? "s" : ""} selected
+              {selectedFindingIds.size >= 25 ? " (Batch limit reached: max 25)" : ""}
+            </span>
+          </div>
+          <div className="batch-actions">
+            <button
+              type="button"
+              className="batch-button-ai"
+              onClick={handleBatchProposeAI}
+              disabled={batchAiLoading}
+            >
+              <Sparkles size={14} />
+              {batchAiLoading ? "Evaluating with Gemini..." : "Batch Propose AI Remediations"}
+            </button>
+            <button
+              type="button"
+              className="batch-button-clear"
+              onClick={() => setSelectedFindingIds(new Set())}
+              disabled={batchAiLoading}
+            >
+              Clear
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ======================================================
           FINDINGS TABLE
       ====================================================== */}
 
@@ -657,6 +745,18 @@ function Findings() {
 
               <thead>
                 <tr>
+                  <th className="checkbox-th">
+                    <input
+                      type="checkbox"
+                      checked={
+                        filteredFindings.length > 0 &&
+                        selectedFindingIds.size > 0 &&
+                        selectedFindingIds.size === Math.min(filteredFindings.length, 25)
+                      }
+                      onChange={toggleSelectAllVisible}
+                      aria-label="Select visible findings (up to 25)"
+                    />
+                  </th>
                   <th>Severity</th>
                   <th>Finding</th>
                   <th>Service</th>
@@ -673,10 +773,19 @@ function Findings() {
 
                   <tr
                     key={finding.id}
+                    className={selectedFindingIds.has(finding.finding_id || finding.id) ? "row-selected" : ""}
                     onClick={() =>
                       setSelectedFinding(finding)
                     }
                   >
+                    <td className="checkbox-td" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        checked={selectedFindingIds.has(finding.finding_id || finding.id)}
+                        onChange={() => toggleSelectFinding(finding.finding_id || finding.id)}
+                        aria-label={`Select finding ${finding.finding_id || finding.id}`}
+                      />
+                    </td>
 
                     <td>
                       <span
@@ -992,6 +1101,107 @@ function Findings() {
 
         </div>
 
+      )}
+
+      {/* ======================================================
+          BATCH AI PROPOSAL RESULTS MODAL
+      ====================================================== */}
+
+      {batchAiResult && (
+        <div className="findings-batch-modal-overlay" onClick={() => setBatchAiResult(null)}>
+          <div className="findings-batch-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="batch-modal-header">
+              <div className="batch-modal-title">
+                <Sparkles size={18} className="ai-modal-sparkle" />
+                <h3>Batch AI Remediation Proposals</h3>
+              </div>
+              <button
+                type="button"
+                className="batch-modal-close"
+                onClick={() => setBatchAiResult(null)}
+                aria-label="Close modal"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {batchAiResult.error ? (
+              <div className="batch-modal-alert error">
+                <strong>Batch proposal generation failed</strong>
+                <p>{batchAiResult.error}</p>
+              </div>
+            ) : (
+              <div className="batch-modal-body">
+                <div className="batch-summary-stats">
+                  <div className="batch-stat-card success">
+                    <span>PROPOSALS CREATED</span>
+                    <strong>{batchAiResult.successful || 0}</strong>
+                  </div>
+                  <div className="batch-stat-card neutral">
+                    <span>NO ACTION NEEDED</span>
+                    <strong>{batchAiResult.no_action || 0}</strong>
+                  </div>
+                  <div className="batch-stat-card fail">
+                    <span>FAILED / INELIGIBLE</span>
+                    <strong>{batchAiResult.failed || 0}</strong>
+                  </div>
+                </div>
+
+                <p className="batch-modal-note">
+                  AI proposals start in <strong>Proposed</strong> status. Per strict safety controls, human approval is required before execution.
+                </p>
+
+                <div className="batch-results-list">
+                  {(batchAiResult.results || []).map((res) => (
+                    <div key={res.finding_id} className={`batch-result-row ${res.status}`}>
+                      <div className="batch-result-info">
+                        <strong>{res.finding_id}</strong>
+                        <span>
+                          {res.status === "success"
+                            ? res.deduplicated
+                              ? "Active proposal already exists in queue"
+                              : "New AI proposal generated and queued"
+                            : res.status === "no_action"
+                              ? res.reason || "No automated action recommended"
+                              : res.error_message || "Evaluation failed"}
+                        </span>
+                      </div>
+                      <span className={`batch-status-tag ${res.status}`}>
+                        {res.status === "success"
+                          ? res.deduplicated
+                            ? "Deduplicated"
+                            : "Proposed"
+                          : res.status === "no_action"
+                            ? "No Action"
+                            : "Error"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="batch-modal-footer">
+                  <button
+                    type="button"
+                    className="batch-modal-btn primary"
+                    onClick={() => {
+                      setBatchAiResult(null);
+                      navigate("/remediation");
+                    }}
+                  >
+                    Go to Remediation Center &rarr;
+                  </button>
+                  <button
+                    type="button"
+                    className="batch-modal-btn secondary"
+                    onClick={() => setBatchAiResult(null)}
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
       )}
 
     </div>

@@ -24,6 +24,7 @@ from app.services.ai_remediation_proposer import (
     AIRemediationNotFoundError,
     AIRemediationServiceError,
     AIRemediationValidationError,
+    batch_propose_ai_remediations,
     build_prompt,
     parse_model_output,
     propose_ai_remediation,
@@ -759,6 +760,141 @@ class AIRemediationProposerServiceTests(unittest.TestCase):
         self.assertIn("Finding service does not match EC2 action", str(ctx.exception))
         mock_audit.assert_called_once()
         self.assertEqual(mock_audit.call_args[1]["authorization_result"], "DENIED")
+
+
+class AIRemediationBatchProposerServiceTests(unittest.TestCase):
+    """Unit tests for batch AI remediation proposal evaluation."""
+
+    def setUp(self):
+        self.user_id = "user-batch-1"
+        self.org_id = "org-batch-1"
+        self.role_admin = "admin"
+
+    def test_batch_empty_finding_ids_raises_validation_error(self):
+        with self.assertRaises(AIRemediationValidationError) as ctx:
+            batch_propose_ai_remediations(
+                finding_ids=[],
+                user_id=self.user_id,
+                organization_id=self.org_id,
+                role=self.role_admin,
+            )
+        self.assertIn("at least one valid finding identifier", str(ctx.exception))
+
+    def test_batch_exceeds_max_batch_size_raises_validation_error(self):
+        excessive_ids = [f"finding-{i}" for i in range(26)]
+        with self.assertRaises(AIRemediationValidationError) as ctx:
+            batch_propose_ai_remediations(
+                finding_ids=excessive_ids,
+                user_id=self.user_id,
+                organization_id=self.org_id,
+                role=self.role_admin,
+            )
+        self.assertIn("exceeds maximum limit of 25", str(ctx.exception))
+
+    def test_batch_deduplicates_duplicate_finding_ids(self):
+        with patch("app.services.ai_remediation_proposer.propose_ai_remediation") as mock_propose:
+            mock_propose.return_value = {
+                "status": "success",
+                "created": True,
+                "deduplicated": False,
+                "remediation": {"_id": "rem-1"},
+            }
+            res = batch_propose_ai_remediations(
+                finding_ids=["finding-1", "finding-1", "  finding-1  "],
+                user_id=self.user_id,
+                organization_id=self.org_id,
+                role=self.role_admin,
+            )
+            self.assertEqual(res["total"], 1)
+            self.assertEqual(res["successful"], 1)
+            self.assertEqual(len(res["results"]), 1)
+            mock_propose.assert_called_once()
+
+    @patch("app.services.ai_remediation_proposer.propose_ai_remediation")
+    def test_batch_concurrent_success(self, mock_propose):
+        def _fake_propose(finding_id, **kwargs):
+            return {
+                "status": "success",
+                "created": True,
+                "deduplicated": False,
+                "remediation": {"_id": f"rem-{finding_id}", "finding_id": finding_id},
+            }
+
+        mock_propose.side_effect = _fake_propose
+
+        findings = ["finding-a", "finding-b", "finding-c"]
+        res = batch_propose_ai_remediations(
+            finding_ids=findings,
+            user_id=self.user_id,
+            organization_id=self.org_id,
+            role=self.role_admin,
+        )
+
+        self.assertEqual(res["total"], 3)
+        self.assertEqual(res["successful"], 3)
+        self.assertEqual(res["no_action"], 0)
+        self.assertEqual(res["failed"], 0)
+        self.assertEqual(len(res["results"]), 3)
+        self.assertEqual([r["finding_id"] for r in res["results"]], findings)
+        for r in res["results"]:
+            self.assertEqual(r["status"], "success")
+            self.assertTrue(r["created"])
+
+    @patch("app.services.ai_remediation_proposer.propose_ai_remediation")
+    def test_batch_mixed_results_isolation(self, mock_propose):
+        def _side_effect(finding_id, **kwargs):
+            if finding_id == "finding-success":
+                return {
+                    "status": "success",
+                    "created": True,
+                    "deduplicated": False,
+                    "remediation": {"_id": "rem-success"},
+                }
+            if finding_id == "finding-no-action":
+                return {
+                    "status": "no_action",
+                    "reason": "No registered action",
+                    "confidence": 0.85,
+                    "rationale": "Info only",
+                    "risk_notes": "None",
+                }
+            if finding_id == "finding-not-found":
+                raise AIRemediationNotFoundError("Finding not found")
+            if finding_id == "finding-conflict":
+                raise AIRemediationConflictError("Finding already resolved")
+            raise Exception("Unexpected database glitch")
+
+        mock_propose.side_effect = _side_effect
+
+        findings = [
+            "finding-success",
+            "finding-no-action",
+            "finding-not-found",
+            "finding-conflict",
+            "finding-glitch",
+        ]
+
+        res = batch_propose_ai_remediations(
+            finding_ids=findings,
+            user_id=self.user_id,
+            organization_id=self.org_id,
+            role=self.role_admin,
+        )
+
+        self.assertEqual(res["total"], 5)
+        self.assertEqual(res["successful"], 1)
+        self.assertEqual(res["no_action"], 1)
+        self.assertEqual(res["failed"], 3)
+
+        result_map = {r["finding_id"]: r for r in res["results"]}
+        self.assertEqual(result_map["finding-success"]["status"], "success")
+        self.assertEqual(result_map["finding-no-action"]["status"], "no_action")
+        self.assertEqual(result_map["finding-not-found"]["status"], "error")
+        self.assertEqual(result_map["finding-not-found"]["error_code"], "NOT_FOUND")
+        self.assertEqual(result_map["finding-conflict"]["status"], "error")
+        self.assertEqual(result_map["finding-conflict"]["error_code"], "CONFLICT")
+        self.assertEqual(result_map["finding-glitch"]["status"], "error")
+        self.assertEqual(result_map["finding-glitch"]["error_code"], "INTERNAL_ERROR")
 
 
 if __name__ == "__main__":

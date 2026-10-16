@@ -69,3 +69,10 @@ export async function createAIRemediationProposal(findingId) {
   });
   return response.data;
 }
+
+export async function createBatchAIRemediationProposals(findingIds) {
+  const response = await api.post("/remediation/ai-proposals/batch", {
+    finding_ids: findingIds,
+  });
+  return response.data;
+}

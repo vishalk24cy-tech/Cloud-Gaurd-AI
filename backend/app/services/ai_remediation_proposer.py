@@ -9,7 +9,8 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any, Dict, Optional, Sequence, Tuple
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from app.ai.gemini import generate_raw_text
 from app.models.audit_log import (
@@ -53,6 +54,7 @@ _logger = logging.getLogger("cloudguardai.ai_remediation")
 # ============================================================
 
 MIN_CONFIDENCE_THRESHOLD: float = 0.6
+MAX_BATCH_SIZE: int = 25
 
 ALLOWED_AI_ACTION_IDS: Tuple[str, ...] = (
     ACTION_EC2_STOP_INSTANCE,
@@ -754,4 +756,164 @@ def propose_ai_remediation(
         "created": True,
         "deduplicated": False,
         "remediation": remediation,
+    }
+
+
+# ============================================================
+# Concurrent Batch Service Entrypoint
+# ============================================================
+
+def batch_propose_ai_remediations(
+    finding_ids: Sequence[str],
+    user_id: str,
+    organization_id: str,
+    role: str,
+    request_id: Optional[str] = None,
+    max_workers: int = 4,
+) -> Dict[str, Any]:
+    """
+    Concurrent batch AI remediation proposal evaluation.
+
+    Guarantees:
+    1. Validates batch size: 1 <= count <= 25.
+    2. Runs finding proposals concurrently with a bounded ThreadPoolExecutor.
+    3. Handles per-finding failures gracefully without aborting entire batch.
+    4. Preserves deterministic finding order in the output results list.
+    5. Returns aggregate summary counters: total, successful, no_action, failed.
+    """
+    if not isinstance(finding_ids, (list, tuple)):
+        raise AIRemediationValidationError("finding_ids must be a list of finding identifiers")
+
+    cleaned_ids: List[str] = []
+    seen = set()
+    for fid in finding_ids:
+        cleaned = _clean_text(fid)
+        if cleaned and cleaned not in seen:
+            cleaned_ids.append(cleaned)
+            seen.add(cleaned)
+
+    if not cleaned_ids:
+        raise AIRemediationValidationError("finding_ids must contain at least one valid finding identifier")
+
+    if len(cleaned_ids) > MAX_BATCH_SIZE:
+        raise AIRemediationValidationError(
+            f"Batch size of {len(cleaned_ids)} exceeds maximum limit of {MAX_BATCH_SIZE} findings"
+        )
+
+    user_id = _clean_text(user_id)
+    organization_id = _clean_text(organization_id)
+    role = _clean_text(role).lower()
+
+    effective_workers = max(1, min(max_workers, len(cleaned_ids), 4))
+
+    def _process_single(fid: str) -> Dict[str, Any]:
+        try:
+            res = propose_ai_remediation(
+                finding_id=fid,
+                user_id=user_id,
+                organization_id=organization_id,
+                role=role,
+                request_id=request_id,
+            )
+            if res.get("status") == "no_action":
+                return {
+                    "finding_id": fid,
+                    "status": "no_action",
+                    "reason": res.get("reason"),
+                    "confidence": res.get("confidence"),
+                    "rationale": res.get("rationale"),
+                    "risk_notes": res.get("risk_notes"),
+                }
+            return {
+                "finding_id": fid,
+                "status": "success",
+                "created": bool(res.get("created")),
+                "deduplicated": bool(res.get("deduplicated")),
+                "remediation": res.get("remediation"),
+            }
+        except AIRemediationNotFoundError as exc:
+            return {
+                "finding_id": fid,
+                "status": "error",
+                "error_code": "NOT_FOUND",
+                "error_message": str(exc),
+            }
+        except AIRemediationConflictError as exc:
+            return {
+                "finding_id": fid,
+                "status": "error",
+                "error_code": "CONFLICT",
+                "error_message": str(exc),
+            }
+        except AIRemediationAuthorizationError as exc:
+            return {
+                "finding_id": fid,
+                "status": "error",
+                "error_code": "UNAUTHORIZED",
+                "error_message": str(exc),
+            }
+        except AIRemediationConfidenceError as exc:
+            return {
+                "finding_id": fid,
+                "status": "error",
+                "error_code": "LOW_CONFIDENCE",
+                "error_message": str(exc),
+            }
+        except AIRemediationIncompatibleError as exc:
+            return {
+                "finding_id": fid,
+                "status": "error",
+                "error_code": "INCOMPATIBLE",
+                "error_message": str(exc),
+            }
+        except AIRemediationValidationError as exc:
+            return {
+                "finding_id": fid,
+                "status": "error",
+                "error_code": "VALIDATION_ERROR",
+                "error_message": str(exc),
+            }
+        except AIRemediationServiceError as exc:
+            return {
+                "finding_id": fid,
+                "status": "error",
+                "error_code": "SERVICE_UNAVAILABLE",
+                "error_message": str(exc),
+            }
+        except Exception as exc:
+            _logger.exception("Unexpected error processing finding %s in batch AI proposals", fid)
+            return {
+                "finding_id": fid,
+                "status": "error",
+                "error_code": "INTERNAL_ERROR",
+                "error_message": "Unexpected error occurred during proposal generation",
+            }
+
+    futures = []
+    with ThreadPoolExecutor(max_workers=effective_workers) as executor:
+        for fid in cleaned_ids:
+            futures.append((fid, executor.submit(_process_single, fid)))
+
+        results = []
+        successful_count = 0
+        no_action_count = 0
+        failed_count = 0
+
+        for fid, future in futures:
+            outcome = future.result()
+            results.append(outcome)
+            status_val = outcome.get("status")
+            if status_val == "success":
+                successful_count += 1
+            elif status_val == "no_action":
+                no_action_count += 1
+            else:
+                failed_count += 1
+
+    return {
+        "total": len(cleaned_ids),
+        "successful": successful_count,
+        "no_action": no_action_count,
+        "failed": failed_count,
+        "results": results,
     }

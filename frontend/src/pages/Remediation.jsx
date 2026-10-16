@@ -148,6 +148,7 @@ function Remediation() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [severityFilter, setSeverityFilter] = useState("ALL");
+  const [sourceFilter, setSourceFilter] = useState("ALL");
 
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -281,13 +282,20 @@ function Remediation() {
         .join(" ")
         .toLowerCase();
 
+      const itemSource = String(item?.source || "rule").toLowerCase();
+      const matchesSource =
+        sourceFilter === "ALL" ||
+        (sourceFilter === "AI" && itemSource === "ai") ||
+        (sourceFilter === "RULE" && itemSource !== "ai");
+
       return (
         (!query || searchableText.includes(query)) &&
         (statusFilter === "ALL" || status === statusFilter) &&
-        (severityFilter === "ALL" || severity === severityFilter)
+        (severityFilter === "ALL" || severity === severityFilter) &&
+        matchesSource
       );
     });
-  }, [remediations, search, statusFilter, severityFilter]);
+  }, [remediations, search, statusFilter, severityFilter, sourceFilter]);
 
   const counts = useMemo(() => {
     const result = {
@@ -682,6 +690,16 @@ function Remediation() {
           <option value="MEDIUM">Medium</option>
           <option value="LOW">Low</option>
         </select>
+
+        <select
+          value={sourceFilter}
+          onChange={(event) => setSourceFilter(event.target.value)}
+          aria-label="Filter by proposal source"
+        >
+          <option value="ALL">All sources</option>
+          <option value="AI">✨ AI Proposed</option>
+          <option value="RULE">Rule-based Engine</option>
+        </select>
       </section>
 
       <section className="remediation-workspace">
@@ -743,7 +761,14 @@ function Remediation() {
                       >
                         <td>
                           <div className="finding-cell">
-                            <strong>{getFindingId(item)}</strong>
+                            <div className="finding-id-row">
+                              <strong>{getFindingId(item)}</strong>
+                              {String(item?.source || "").toLowerCase() === "ai" && (
+                                <span className="ai-source-badge" title="Proposed by Gemini AI Reasoning Engine">
+                                  ✨ AI Proposed
+                                </span>
+                              )}
+                            </div>
                             <span>{getFindingTitle(item)}</span>
                           </div>
                         </td>
@@ -806,6 +831,59 @@ function Remediation() {
               </div>
 
               <div className="details-id">{getRemediationId(selected)}</div>
+
+              {((selected.source && String(selected.source).toLowerCase() === "ai") || (selected.metadata && selected.metadata.confidence !== undefined)) && (
+                <div className="detail-section ai-intelligence-section">
+                  <div className="ai-section-header">
+                    <div className="ai-title-group">
+                      <span className="ai-sparkle-icon">✨</span>
+                      <h3>AI Proposal Intelligence</h3>
+                    </div>
+                    <span className="ai-model-tag">
+                      {selected.metadata?.model || "gemini-3.6-flash"}
+                    </span>
+                  </div>
+
+                  {typeof selected.metadata?.confidence === "number" && (
+                    <div className="ai-confidence-block">
+                      <div className="ai-confidence-header">
+                        <span>Confidence Score</span>
+                        <span className="ai-confidence-meter-label">
+                          <strong className="ai-confidence-value">
+                            {Math.round(selected.metadata.confidence * 100)}%
+                          </strong>
+                          <span className="ai-confidence-pill high">PASSED GATE</span>
+                        </span>
+                      </div>
+                      <div className="ai-confidence-meter" role="progressbar" aria-valuenow={Math.round(selected.metadata.confidence * 100)} aria-valuemin="0" aria-valuemax="100">
+                        <div
+                          className="ai-confidence-fill"
+                          style={{ width: `${Math.min(100, Math.max(0, Math.round(selected.metadata.confidence * 100)))}%` }}
+                        />
+                      </div>
+                      <span className="ai-confidence-subtext">
+                        Deterministic safety gate passed with high certainty (&ge; 60% threshold)
+                      </span>
+                    </div>
+                  )}
+
+                  {(selected.metadata?.rationale || selected.reason) && (
+                    <div className="ai-card-block rationale">
+                      <span className="ai-card-label">AI Rationale</span>
+                      <p className="ai-card-text">
+                        {selected.metadata?.rationale || selected.reason}
+                      </p>
+                    </div>
+                  )}
+
+                  {selected.metadata?.risk_notes && (
+                    <div className="ai-card-block risk">
+                      <span className="ai-card-label">Risk Assessment & Blast Radius</span>
+                      <p className="ai-card-text">{selected.metadata.risk_notes}</p>
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="detail-section">
                 <h3>Finding</h3>

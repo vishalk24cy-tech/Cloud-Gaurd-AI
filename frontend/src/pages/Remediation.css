@@ -1383,6 +1383,266 @@
 }
 
 /* =========================================================
+   AI PROPOSAL INTELLIGENCE
+   ========================================================= */
+
+.finding-id-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.ai-source-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid rgba(138, 75, 255, 0.28);
+  background: linear-gradient(135deg, rgba(147, 51, 234, 0.09), rgba(59, 130, 246, 0.09));
+  color: #7934dc;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.2px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.ai-intelligence-section {
+  background: linear-gradient(180deg, #fbfaff 0%, #ffffff 100%);
+  border-left: 3px solid #8b5cf6;
+}
+
+.ai-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.ai-title-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ai-sparkle-icon {
+  font-size: 13px;
+  line-height: 1;
+}
+
+.ai-intelligence-section h3 {
+  margin: 0;
+  color: #5b21b6;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.ai-model-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border: 1px solid #ddd6fe;
+  border-radius: 5px;
+  background: #ede9fe;
+  color: #6d28d9;
+  font-size: 9px;
+  font-weight: 700;
+  font-family: "SFMono-Regular", Consolas, monospace;
+}
+
+.ai-confidence-block {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid #e9d5ff;
+  border-radius: 8px;
+  background: #faf5ff;
+}
+
+.ai-confidence-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  font-size: 11px;
+  color: #4b5563;
+}
+
+.ai-confidence-meter-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ai-confidence-value {
+  color: #7c3aed;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.ai-confidence-pill.high {
+  display: inline-flex;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #dcfce7;
+  color: #15803d;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+}
+
+.ai-confidence-meter {
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: #e9d5ff;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+
+.ai-confidence-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #8b5cf6, #3b82f6);
+  transition: width 0.3s ease;
+}
+
+.ai-confidence-subtext {
+  display: block;
+  font-size: 9px;
+  color: #7e22ce;
+  line-height: 1.35;
+}
+
+.ai-card-block {
+  padding: 9px 11px;
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+
+.ai-card-block.rationale {
+  border: 1px solid #e0e7ff;
+  background: #f5f7ff;
+}
+
+.ai-card-block.risk {
+  border: 1px solid #fee2e2;
+  background: #fffafa;
+  margin-bottom: 0;
+}
+
+.ai-card-label {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.ai-card-block.rationale .ai-card-label {
+  color: #4338ca;
+}
+
+.ai-card-block.risk .ai-card-label {
+  color: #b91c1c;
+}
+
+.ai-card-text {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #374151;
+}
+
+/* Dark theme support for AI intelligence */
+[data-theme="dark"] .ai-source-badge,
+.dark .ai-source-badge {
+  border-color: rgba(167, 139, 250, 0.4);
+  background: rgba(139, 92, 246, 0.2);
+  color: #c4b5fd;
+}
+
+[data-theme="dark"] .ai-intelligence-section,
+.dark .ai-intelligence-section {
+  background: linear-gradient(180deg, #191629 0%, #12101e 100%);
+  border-left-color: #a78bfa;
+}
+
+[data-theme="dark"] .ai-intelligence-section h3,
+.dark .ai-intelligence-section h3 {
+  color: #c4b5fd;
+}
+
+[data-theme="dark"] .ai-model-tag,
+.dark .ai-model-tag {
+  border-color: #4c1d95;
+  background: #2e1065;
+  color: #ddd6fe;
+}
+
+[data-theme="dark"] .ai-confidence-block,
+.dark .ai-confidence-block {
+  border-color: #4c1d95;
+  background: #1e1138;
+}
+
+[data-theme="dark"] .ai-confidence-header,
+.dark .ai-confidence-header {
+  color: #d1d5db;
+}
+
+[data-theme="dark"] .ai-confidence-value,
+.dark .ai-confidence-value {
+  color: #c4b5fd;
+}
+
+[data-theme="dark"] .ai-confidence-meter,
+.dark .ai-confidence-meter {
+  background: #3b1d6b;
+}
+
+[data-theme="dark"] .ai-confidence-subtext,
+.dark .ai-confidence-subtext {
+  color: #c4b5fd;
+}
+
+[data-theme="dark"] .ai-card-block.rationale,
+.dark .ai-card-block.rationale {
+  border-color: #2e3860;
+  background: #141b33;
+}
+
+[data-theme="dark"] .ai-card-block.rationale .ai-card-label,
+.dark .ai-card-block.rationale .ai-card-label {
+  color: #a5b4fc;
+}
+
+[data-theme="dark"] .ai-card-block.rationale .ai-card-text,
+.dark .ai-card-block.rationale .ai-card-text {
+  color: #cbd5e1;
+}
+
+[data-theme="dark"] .ai-card-block.risk,
+.dark .ai-card-block.risk {
+  border-color: #5c2020;
+  background: #2b1414;
+}
+
+[data-theme="dark"] .ai-card-block.risk .ai-card-label,
+.dark .ai-card-block.risk .ai-card-label {
+  color: #fca5a5;
+}
+
+[data-theme="dark"] .ai-card-block.risk .ai-card-text,
+.dark .ai-card-block.risk .ai-card-text {
+  color: #fecaca;
+}
+
+/* =========================================================
    REDUCED MOTION
    ========================================================= */
 

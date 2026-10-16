@@ -464,6 +464,128 @@ class AIRemediationProposalsAPITests(unittest.TestCase):
         self.assertEqual(detail["code"], "APPROVAL_REQUIRED")
         self.assertIn("must be approved before execution", detail["message"])
 
+    # ============================================================
+    # 7. Batch AI Proposal Generation: POST /remediation/ai-proposals/batch
+    # ============================================================
+
+    @patch("app.api.remediation.db")
+    @patch("app.api.remediation.batch_propose_ai_remediations")
+    def test_batch_ai_proposals_success(self, mock_batch, mock_db):
+        self._setup_membership_mock(mock_db, role="owner")
+        mock_batch.return_value = {
+            "total": 2,
+            "successful": 2,
+            "no_action": 0,
+            "failed": 0,
+            "results": [
+                {
+                    "finding_id": "f-1",
+                    "status": "success",
+                    "created": True,
+                    "deduplicated": False,
+                    "remediation": {"_id": "rem-1", "action_type": ACTION_EC2_STOP_INSTANCE},
+                },
+                {
+                    "finding_id": "f-2",
+                    "status": "success",
+                    "created": False,
+                    "deduplicated": True,
+                    "remediation": {"_id": "rem-2", "action_type": ACTION_IAM_DISABLE_ACCESS_KEY},
+                },
+            ],
+        }
+
+        client = TestClient(_make_app(user=self.user_owner))
+        response = client.post(
+            "/remediation/ai-proposals/batch",
+            json={"finding_ids": ["f-1", "f-2"]},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["total"], 2)
+        self.assertEqual(data["successful"], 2)
+        self.assertEqual(len(data["results"]), 2)
+        self.assertEqual(data["results"][0]["finding_id"], "f-1")
+
+    @patch("app.api.remediation.db")
+    def test_batch_ai_proposals_viewer_forbidden(self, mock_db):
+        self._setup_membership_mock(mock_db, user_id="user-viewer-1", role="viewer")
+        client = TestClient(_make_app(user=self.user_viewer))
+        response = client.post(
+            "/remediation/ai-proposals/batch",
+            json={"finding_ids": ["f-1", "f-2"]},
+        )
+        self.assertEqual(response.status_code, 403)
+
+    @patch("app.api.remediation.db")
+    def test_batch_ai_proposals_empty_list_rejected_422(self, mock_db):
+        self._setup_membership_mock(mock_db, role="owner")
+        client = TestClient(_make_app(user=self.user_owner))
+        response = client.post(
+            "/remediation/ai-proposals/batch",
+            json={"finding_ids": []},
+        )
+        self.assertEqual(response.status_code, 422)
+
+    @patch("app.api.remediation.db")
+    def test_batch_ai_proposals_exceeds_max_25_rejected_422(self, mock_db):
+        self._setup_membership_mock(mock_db, role="owner")
+        client = TestClient(_make_app(user=self.user_owner))
+        excessive = [f"f-{i}" for i in range(26)]
+        response = client.post(
+            "/remediation/ai-proposals/batch",
+            json={"finding_ids": excessive},
+        )
+        self.assertEqual(response.status_code, 422)
+
+    @patch("app.api.remediation.db")
+    @patch("app.api.remediation.batch_propose_ai_remediations")
+    def test_batch_ai_proposals_partial_failure_isolation(self, mock_batch, mock_db):
+        self._setup_membership_mock(mock_db, role="owner")
+        mock_batch.return_value = {
+            "total": 3,
+            "successful": 1,
+            "no_action": 1,
+            "failed": 1,
+            "results": [
+                {
+                    "finding_id": "f-success",
+                    "status": "success",
+                    "created": True,
+                    "deduplicated": False,
+                    "remediation": {"_id": "rem-ok"},
+                },
+                {
+                    "finding_id": "f-noaction",
+                    "status": "no_action",
+                    "reason": "No registered action",
+                    "confidence": 0.9,
+                    "rationale": "Monitor",
+                    "risk_notes": "None",
+                },
+                {
+                    "finding_id": "f-missing",
+                    "status": "error",
+                    "error_code": "NOT_FOUND",
+                    "error_message": "Finding not found for this tenant",
+                },
+            ],
+        }
+
+        client = TestClient(_make_app(user=self.user_owner))
+        response = client.post(
+            "/remediation/ai-proposals/batch",
+            json={"finding_ids": ["f-success", "f-noaction", "f-missing"]},
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["total"], 3)
+        self.assertEqual(data["successful"], 1)
+        self.assertEqual(data["no_action"], 1)
+        self.assertEqual(data["failed"], 1)
+        self.assertEqual(data["results"][2]["error_code"], "NOT_FOUND")
+
 
 if __name__ == "__main__":
     unittest.main()

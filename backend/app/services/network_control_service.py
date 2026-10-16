@@ -1252,6 +1252,403 @@ def query_vpc_endpoints(
     }
 
 
+def discover_multi_region_subnets(
+    session: Any,
+    regions: Optional[List[str]] = None,
+    max_records_per_region: Optional[int] = 50,
+    search: Optional[str] = None,
+    timeout_per_region: float = 6.0,
+    max_workers: int = 5,
+) -> Dict[str, Any]:
+    """
+    Perform bounded, concurrent multi-region Subnet discovery.
+    """
+    if session is None:
+        raise ValueError("AWS session is required for multi-region Subnet discovery.")
+
+    target_regions = [r.strip() for r in (regions or STANDARD_AWS_REGIONS) if r and isinstance(r, str)]
+    all_subnets: List[Dict[str, Any]] = []
+    regional_failures: List[Dict[str, Any]] = []
+    successful_regions: List[str] = []
+
+    client_lock = threading.Lock()
+
+    def _query_region(reg: str) -> Dict[str, Any]:
+        with client_lock:
+            client = session.client("ec2", region_name=reg, config=AWS_CONFIG)
+        return query_subnets(
+            ec2_client=client,
+            region=reg,
+            max_records=max_records_per_region,
+            search=search,
+        )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_region = {
+            executor.submit(_query_region, r): r
+            for r in target_regions
+        }
+        for future in concurrent.futures.as_completed(future_to_region):
+            r = future_to_region[future]
+            try:
+                result = future.result(timeout=timeout_per_region)
+                all_subnets.extend(result.get("subnets", []))
+                successful_regions.append(r)
+            except NetworkControlExecutionError as net_err:
+                regional_failures.append({
+                    "region": r,
+                    "code": net_err.code,
+                    "error": net_err.public_message,
+                })
+            except ClientError as ce:
+                code = ce.response.get("Error", {}).get("Code", "AWS_CLIENT_ERROR")
+                msg = ce.response.get("Error", {}).get("Message", str(ce))
+                regional_failures.append({
+                    "region": r,
+                    "code": code,
+                    "error": f"[{code}] {msg}",
+                })
+            except TimeoutError:
+                regional_failures.append({
+                    "region": r,
+                    "code": "TimeoutError",
+                    "error": f"Subnet discovery timed out after {timeout_per_region}s for region {r}.",
+                })
+            except Exception as exc:
+                regional_failures.append({
+                    "region": r,
+                    "code": type(exc).__name__,
+                    "error": str(exc),
+                })
+
+    if (
+        len(regional_failures) == len(target_regions)
+        and all(f.get("code") in ("AWS_ACCESS_DENIED", "AccessDenied", "UnauthorizedOperation") for f in regional_failures)
+    ):
+        raise NetworkControlExecutionError(
+            status_code=403,
+            code="AWS_ACCESS_DENIED",
+            category="PERMISSION_DENIED",
+            message="AWS AccessDenied: The IAM role lacks ec2:DescribeSubnets permission across all queried regions.",
+        )
+
+    all_subnets.sort(key=lambda x: (x.get("region", ""), x.get("subnet_id", "")))
+    coverage = "COMPLETE" if not regional_failures else "PARTIAL"
+
+    summary = {
+        "total_subnets": len(all_subnets),
+        "public_subnets": sum(1 for s in all_subnets if s.get("map_public_ip_on_launch")),
+        "private_subnets": sum(1 for s in all_subnets if not s.get("map_public_ip_on_launch")),
+        "regions": successful_regions,
+    }
+
+    return {
+        "subnets": all_subnets,
+        "total_count": len(all_subnets),
+        "summary": summary,
+        "regions_searched": target_regions,
+        "successful_regions": successful_regions,
+        "regional_failures": regional_failures,
+        "coverage": coverage,
+        "retrieved_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def discover_multi_region_route_tables(
+    session: Any,
+    regions: Optional[List[str]] = None,
+    max_records_per_region: Optional[int] = 50,
+    search: Optional[str] = None,
+    timeout_per_region: float = 6.0,
+    max_workers: int = 5,
+) -> Dict[str, Any]:
+    """
+    Perform bounded, concurrent multi-region Route Tables discovery.
+    """
+    if session is None:
+        raise ValueError("AWS session is required for multi-region Route Table discovery.")
+
+    target_regions = [r.strip() for r in (regions or STANDARD_AWS_REGIONS) if r and isinstance(r, str)]
+    all_tables: List[Dict[str, Any]] = []
+    regional_failures: List[Dict[str, Any]] = []
+    successful_regions: List[str] = []
+
+    client_lock = threading.Lock()
+
+    def _query_region(reg: str) -> Dict[str, Any]:
+        with client_lock:
+            client = session.client("ec2", region_name=reg, config=AWS_CONFIG)
+        return query_route_tables(
+            ec2_client=client,
+            region=reg,
+            max_records=max_records_per_region,
+            search=search,
+        )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_region = {
+            executor.submit(_query_region, r): r
+            for r in target_regions
+        }
+        for future in concurrent.futures.as_completed(future_to_region):
+            r = future_to_region[future]
+            try:
+                result = future.result(timeout=timeout_per_region)
+                all_tables.extend(result.get("route_tables", []))
+                successful_regions.append(r)
+            except NetworkControlExecutionError as net_err:
+                regional_failures.append({
+                    "region": r,
+                    "code": net_err.code,
+                    "error": net_err.public_message,
+                })
+            except ClientError as ce:
+                code = ce.response.get("Error", {}).get("Code", "AWS_CLIENT_ERROR")
+                msg = ce.response.get("Error", {}).get("Message", str(ce))
+                regional_failures.append({
+                    "region": r,
+                    "code": code,
+                    "error": f"[{code}] {msg}",
+                })
+            except TimeoutError:
+                regional_failures.append({
+                    "region": r,
+                    "code": "TimeoutError",
+                    "error": f"Route Table discovery timed out after {timeout_per_region}s for region {r}.",
+                })
+            except Exception as exc:
+                regional_failures.append({
+                    "region": r,
+                    "code": type(exc).__name__,
+                    "error": str(exc),
+                })
+
+    if (
+        len(regional_failures) == len(target_regions)
+        and all(f.get("code") in ("AWS_ACCESS_DENIED", "AccessDenied", "UnauthorizedOperation") for f in regional_failures)
+    ):
+        raise NetworkControlExecutionError(
+            status_code=403,
+            code="AWS_ACCESS_DENIED",
+            category="PERMISSION_DENIED",
+            message="AWS AccessDenied: The IAM role lacks ec2:DescribeRouteTables permission across all queried regions.",
+        )
+
+    all_tables.sort(key=lambda x: (x.get("region", ""), x.get("route_table_id", "")))
+    coverage = "COMPLETE" if not regional_failures else "PARTIAL"
+
+    summary = {
+        "total_route_tables": len(all_tables),
+        "public_route_tables": sum(1 for t in all_tables if t.get("has_direct_internet_route")),
+        "private_route_tables": sum(1 for t in all_tables if not t.get("has_direct_internet_route")),
+        "regions": successful_regions,
+    }
+
+    return {
+        "route_tables": all_tables,
+        "total_count": len(all_tables),
+        "summary": summary,
+        "regions_searched": target_regions,
+        "successful_regions": successful_regions,
+        "regional_failures": regional_failures,
+        "coverage": coverage,
+        "retrieved_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def discover_multi_region_gateways(
+    session: Any,
+    regions: Optional[List[str]] = None,
+    max_records_per_region: Optional[int] = 50,
+    search: Optional[str] = None,
+    timeout_per_region: float = 6.0,
+    max_workers: int = 5,
+) -> Dict[str, Any]:
+    """
+    Perform bounded, concurrent multi-region Internet & NAT Gateways discovery.
+    """
+    if session is None:
+        raise ValueError("AWS session is required for multi-region Gateway discovery.")
+
+    target_regions = [r.strip() for r in (regions or STANDARD_AWS_REGIONS) if r and isinstance(r, str)]
+    all_gateways: List[Dict[str, Any]] = []
+    regional_failures: List[Dict[str, Any]] = []
+    successful_regions: List[str] = []
+
+    client_lock = threading.Lock()
+
+    def _query_region(reg: str) -> Dict[str, Any]:
+        with client_lock:
+            client = session.client("ec2", region_name=reg, config=AWS_CONFIG)
+        return query_gateways(
+            ec2_client=client,
+            region=reg,
+            max_records=max_records_per_region,
+            search=search,
+        )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_region = {
+            executor.submit(_query_region, r): r
+            for r in target_regions
+        }
+        for future in concurrent.futures.as_completed(future_to_region):
+            r = future_to_region[future]
+            try:
+                result = future.result(timeout=timeout_per_region)
+                all_gateways.extend(result.get("gateways", []))
+                successful_regions.append(r)
+            except NetworkControlExecutionError as net_err:
+                regional_failures.append({
+                    "region": r,
+                    "code": net_err.code,
+                    "error": net_err.public_message,
+                })
+            except ClientError as ce:
+                code = ce.response.get("Error", {}).get("Code", "AWS_CLIENT_ERROR")
+                msg = ce.response.get("Error", {}).get("Message", str(ce))
+                regional_failures.append({
+                    "region": r,
+                    "code": code,
+                    "error": f"[{code}] {msg}",
+                })
+            except TimeoutError:
+                regional_failures.append({
+                    "region": r,
+                    "code": "TimeoutError",
+                    "error": f"Gateway discovery timed out after {timeout_per_region}s for region {r}.",
+                })
+            except Exception as exc:
+                regional_failures.append({
+                    "region": r,
+                    "code": type(exc).__name__,
+                    "error": str(exc),
+                })
+
+    all_gateways.sort(key=lambda x: (x.get("region", ""), x.get("gateway_id", "")))
+    coverage = "COMPLETE" if not regional_failures else "PARTIAL"
+
+    summary = {
+        "total_gateways": len(all_gateways),
+        "internet_gateways": sum(1 for g in all_gateways if g.get("gateway_type") == "INTERNET_GATEWAY"),
+        "nat_gateways": sum(1 for g in all_gateways if g.get("gateway_type") == "NAT_GATEWAY"),
+        "regions": successful_regions,
+    }
+
+    return {
+        "gateways": all_gateways,
+        "total_count": len(all_gateways),
+        "summary": summary,
+        "regions_searched": target_regions,
+        "successful_regions": successful_regions,
+        "regional_failures": regional_failures,
+        "coverage": coverage,
+        "retrieved_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def discover_multi_region_vpc_endpoints(
+    session: Any,
+    regions: Optional[List[str]] = None,
+    max_records_per_region: Optional[int] = 50,
+    search: Optional[str] = None,
+    timeout_per_region: float = 6.0,
+    max_workers: int = 5,
+) -> Dict[str, Any]:
+    """
+    Perform bounded, concurrent multi-region VPC Endpoints discovery.
+    """
+    if session is None:
+        raise ValueError("AWS session is required for multi-region VPC Endpoint discovery.")
+
+    target_regions = [r.strip() for r in (regions or STANDARD_AWS_REGIONS) if r and isinstance(r, str)]
+    all_endpoints: List[Dict[str, Any]] = []
+    regional_failures: List[Dict[str, Any]] = []
+    successful_regions: List[str] = []
+
+    client_lock = threading.Lock()
+
+    def _query_region(reg: str) -> Dict[str, Any]:
+        with client_lock:
+            client = session.client("ec2", region_name=reg, config=AWS_CONFIG)
+        return query_vpc_endpoints(
+            ec2_client=client,
+            region=reg,
+            max_records=max_records_per_region,
+            search=search,
+        )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_region = {
+            executor.submit(_query_region, r): r
+            for r in target_regions
+        }
+        for future in concurrent.futures.as_completed(future_to_region):
+            r = future_to_region[future]
+            try:
+                result = future.result(timeout=timeout_per_region)
+                all_endpoints.extend(result.get("endpoints", []))
+                successful_regions.append(r)
+            except NetworkControlExecutionError as net_err:
+                regional_failures.append({
+                    "region": r,
+                    "code": net_err.code,
+                    "error": net_err.public_message,
+                })
+            except ClientError as ce:
+                code = ce.response.get("Error", {}).get("Code", "AWS_CLIENT_ERROR")
+                msg = ce.response.get("Error", {}).get("Message", str(ce))
+                regional_failures.append({
+                    "region": r,
+                    "code": code,
+                    "error": f"[{code}] {msg}",
+                })
+            except TimeoutError:
+                regional_failures.append({
+                    "region": r,
+                    "code": "TimeoutError",
+                    "error": f"VPC Endpoint discovery timed out after {timeout_per_region}s for region {r}.",
+                })
+            except Exception as exc:
+                regional_failures.append({
+                    "region": r,
+                    "code": type(exc).__name__,
+                    "error": str(exc),
+                })
+
+    if (
+        len(regional_failures) == len(target_regions)
+        and all(f.get("code") in ("AWS_ACCESS_DENIED", "AccessDenied", "UnauthorizedOperation") for f in regional_failures)
+    ):
+        raise NetworkControlExecutionError(
+            status_code=403,
+            code="AWS_ACCESS_DENIED",
+            category="PERMISSION_DENIED",
+            message="AWS AccessDenied: The IAM role lacks ec2:DescribeVpcEndpoints permission across all queried regions.",
+        )
+
+    all_endpoints.sort(key=lambda x: (x.get("region", ""), x.get("vpc_endpoint_id", "")))
+    coverage = "COMPLETE" if not regional_failures else "PARTIAL"
+
+    summary = {
+        "total_endpoints": len(all_endpoints),
+        "interface_endpoints": sum(1 for e in all_endpoints if e.get("endpoint_type") == "Interface"),
+        "gateway_endpoints": sum(1 for e in all_endpoints if e.get("endpoint_type") == "Gateway"),
+        "regions": successful_regions,
+    }
+
+    return {
+        "endpoints": all_endpoints,
+        "total_count": len(all_endpoints),
+        "summary": summary,
+        "regions_searched": target_regions,
+        "successful_regions": successful_regions,
+        "regional_failures": regional_failures,
+        "coverage": coverage,
+        "retrieved_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 # ============================================================
 # SAFE SECURITY GROUP CONTROL / REMEDIATION MUTATION
 # ============================================================

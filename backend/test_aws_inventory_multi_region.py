@@ -32,6 +32,10 @@ from app.services.rds_control_service import (
 from app.services.network_control_service import (
     discover_multi_region_vpcs,
     discover_multi_region_security_groups,
+    discover_multi_region_subnets,
+    discover_multi_region_route_tables,
+    discover_multi_region_gateways,
+    discover_multi_region_vpc_endpoints,
     STANDARD_AWS_REGIONS as NET_STANDARD_REGIONS,
 )
 
@@ -438,6 +442,97 @@ class TestAWSInventoryMultiRegion(unittest.TestCase):
         self.assertEqual(sg_res["coverage"], "COMPLETE")
         self.assertEqual(sg_res["total_count"], 2)
 
+    def test_network_multi_region_subnets_and_route_tables(self):
+        """Subnets and Route Tables multi-region discovery runs across regions and formats summaries."""
+        session = MagicMock()
+
+        def make_client(service_name, region_name=None, *args, **kwargs):
+            client = MagicMock()
+            client.describe_subnets.return_value = {
+                "Subnets": [
+                    {
+                        "SubnetId": f"subnet-{region_name}-01",
+                        "VpcId": f"vpc-{region_name}-01",
+                        "CidrBlock": "10.0.1.0/24",
+                        "MapPublicIpOnLaunch": True,
+                        "AvailabilityZone": f"{region_name}a",
+                        "Tags": [{"Key": "Name", "Value": f"sub-{region_name}"}],
+                    }
+                ]
+            }
+            client.describe_route_tables.return_value = {
+                "RouteTables": [
+                    {
+                        "RouteTableId": f"rtb-{region_name}-01",
+                        "VpcId": f"vpc-{region_name}-01",
+                        "Routes": [
+                            {"DestinationCidrBlock": "0.0.0.0/0", "GatewayId": f"igw-{region_name}-01"}
+                        ],
+                        "Associations": [],
+                        "Tags": [{"Key": "Name", "Value": f"rt-{region_name}"}],
+                    }
+                ]
+            }
+            return client
+
+        session.client.side_effect = make_client
+
+        test_regions = ["us-east-1", "eu-central-1"]
+        sub_res = discover_multi_region_subnets(session, regions=test_regions, max_workers=2)
+        self.assertEqual(sub_res["coverage"], "COMPLETE")
+        self.assertEqual(sub_res["total_count"], 2)
+        self.assertEqual(sub_res["summary"]["public_subnets"], 2)
+
+        rt_res = discover_multi_region_route_tables(session, regions=test_regions, max_workers=2)
+        self.assertEqual(rt_res["coverage"], "COMPLETE")
+        self.assertEqual(rt_res["total_count"], 2)
+        self.assertEqual(rt_res["summary"]["public_route_tables"], 2)
+
+    def test_network_multi_region_gateways_and_endpoints(self):
+        """Gateways and VPC Endpoints multi-region discovery runs across regions."""
+        session = MagicMock()
+
+        def make_client(service_name, region_name=None, *args, **kwargs):
+            client = MagicMock()
+            client.describe_internet_gateways.return_value = {
+                "InternetGateways": [
+                    {
+                        "InternetGatewayId": f"igw-{region_name}-01",
+                        "Attachments": [{"VpcId": f"vpc-{region_name}-01"}],
+                        "Tags": [{"Key": "Name", "Value": f"igw-{region_name}"}],
+                    }
+                ]
+            }
+            client.describe_nat_gateways.return_value = {"NatGateways": []}
+            client.describe_vpc_endpoints.return_value = {
+                "VpcEndpoints": [
+                    {
+                        "VpcEndpointId": f"vpce-{region_name}-01",
+                        "VpcId": f"vpc-{region_name}-01",
+                        "ServiceName": "com.amazonaws.us-east-1.s3",
+                        "VpcEndpointType": "Gateway",
+                        "State": "available",
+                        "RouteTableIds": [f"rtb-{region_name}-01"],
+                        "SubnetIds": [],
+                        "Tags": [],
+                    }
+                ]
+            }
+            return client
+
+        session.client.side_effect = make_client
+
+        test_regions = ["us-east-1", "ap-south-1"]
+        gw_res = discover_multi_region_gateways(session, regions=test_regions, max_workers=2)
+        self.assertEqual(gw_res["coverage"], "COMPLETE")
+        self.assertEqual(gw_res["total_count"], 2)
+        self.assertEqual(gw_res["summary"]["internet_gateways"], 2)
+
+        ep_res = discover_multi_region_vpc_endpoints(session, regions=test_regions, max_workers=2)
+        self.assertEqual(ep_res["coverage"], "COMPLETE")
+        self.assertEqual(ep_res["total_count"], 2)
+        self.assertEqual(ep_res["summary"]["gateway_endpoints"], 2)
+
     def test_network_multi_region_vpcs_endpoint(self):
         """GET /cloud/aws/network/{account_id}/vpcs?region=all calls discover_multi_region_vpcs."""
         with patch("app.api.cloud.discover_multi_region_vpcs") as mock_disc:
@@ -452,6 +547,86 @@ class TestAWSInventoryMultiRegion(unittest.TestCase):
             }
 
             resp = self.client.get(f"/cloud/aws/network/{self.account_id}/vpcs?region=all")
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json()
+            self.assertEqual(data["status"], "success")
+            self.assertEqual(data["region"], "all")
+            self.assertEqual(data["coverage"], "COMPLETE")
+
+    def test_network_multi_region_subnets_endpoint(self):
+        """GET /cloud/aws/network/{account_id}/subnets?region=all calls discover_multi_region_subnets."""
+        with patch("app.api.cloud.discover_multi_region_subnets") as mock_disc:
+            mock_disc.return_value = {
+                "total_count": 1,
+                "summary": {"total_subnets": 1, "public_subnets": 1, "private_subnets": 0},
+                "subnets": [{"subnet_id": "subnet-1", "region": "us-east-1"}],
+                "coverage": "COMPLETE",
+                "regional_failures": [],
+                "successful_regions": ["us-east-1"],
+                "retrieved_at": datetime.now(timezone.utc).isoformat(),
+            }
+
+            resp = self.client.get(f"/cloud/aws/network/{self.account_id}/subnets?region=all")
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json()
+            self.assertEqual(data["status"], "success")
+            self.assertEqual(data["region"], "all")
+            self.assertEqual(data["coverage"], "COMPLETE")
+
+    def test_network_multi_region_route_tables_endpoint(self):
+        """GET /cloud/aws/network/{account_id}/route-tables?region=all calls discover_multi_region_route_tables."""
+        with patch("app.api.cloud.discover_multi_region_route_tables") as mock_disc:
+            mock_disc.return_value = {
+                "total_count": 1,
+                "summary": {"total_route_tables": 1, "public_route_tables": 1, "private_route_tables": 0},
+                "route_tables": [{"route_table_id": "rtb-1", "region": "us-east-1"}],
+                "coverage": "COMPLETE",
+                "regional_failures": [],
+                "successful_regions": ["us-east-1"],
+                "retrieved_at": datetime.now(timezone.utc).isoformat(),
+            }
+
+            resp = self.client.get(f"/cloud/aws/network/{self.account_id}/route-tables?region=all")
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json()
+            self.assertEqual(data["status"], "success")
+            self.assertEqual(data["region"], "all")
+            self.assertEqual(data["coverage"], "COMPLETE")
+
+    def test_network_multi_region_gateways_endpoint(self):
+        """GET /cloud/aws/network/{account_id}/gateways?region=all calls discover_multi_region_gateways."""
+        with patch("app.api.cloud.discover_multi_region_gateways") as mock_disc:
+            mock_disc.return_value = {
+                "total_count": 1,
+                "summary": {"total_gateways": 1, "internet_gateways": 1, "nat_gateways": 0},
+                "gateways": [{"gateway_id": "igw-1", "region": "us-east-1"}],
+                "coverage": "COMPLETE",
+                "regional_failures": [],
+                "successful_regions": ["us-east-1"],
+                "retrieved_at": datetime.now(timezone.utc).isoformat(),
+            }
+
+            resp = self.client.get(f"/cloud/aws/network/{self.account_id}/gateways?region=all")
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json()
+            self.assertEqual(data["status"], "success")
+            self.assertEqual(data["region"], "all")
+            self.assertEqual(data["coverage"], "COMPLETE")
+
+    def test_network_multi_region_endpoints_endpoint(self):
+        """GET /cloud/aws/network/{account_id}/endpoints?region=all calls discover_multi_region_vpc_endpoints."""
+        with patch("app.api.cloud.discover_multi_region_vpc_endpoints") as mock_disc:
+            mock_disc.return_value = {
+                "total_count": 1,
+                "summary": {"total_endpoints": 1, "interface_endpoints": 0, "gateway_endpoints": 1},
+                "endpoints": [{"vpc_endpoint_id": "vpce-1", "region": "us-east-1"}],
+                "coverage": "COMPLETE",
+                "regional_failures": [],
+                "successful_regions": ["us-east-1"],
+                "retrieved_at": datetime.now(timezone.utc).isoformat(),
+            }
+
+            resp = self.client.get(f"/cloud/aws/network/{self.account_id}/endpoints?region=all")
             self.assertEqual(resp.status_code, 200)
             data = resp.json()
             self.assertEqual(data["status"], "success")
@@ -514,6 +689,10 @@ class TestAWSInventoryMultiRegion(unittest.TestCase):
             f"/cloud/aws/rds/{self.disconnected_account_id}/clusters",
             f"/cloud/aws/network/{self.disconnected_account_id}/vpcs",
             f"/cloud/aws/network/{self.disconnected_account_id}/security-groups",
+            f"/cloud/aws/network/{self.disconnected_account_id}/subnets",
+            f"/cloud/aws/network/{self.disconnected_account_id}/route-tables",
+            f"/cloud/aws/network/{self.disconnected_account_id}/gateways",
+            f"/cloud/aws/network/{self.disconnected_account_id}/endpoints",
             f"/cloud/aws/s3/{self.disconnected_account_id}/buckets",
             f"/cloud/aws/iam/{self.disconnected_account_id}/inventory",
         ]

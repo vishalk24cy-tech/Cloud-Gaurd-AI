@@ -86,6 +86,10 @@ from app.services.network_control_service import (
     query_vpc_endpoints,
     discover_multi_region_vpcs,
     discover_multi_region_security_groups,
+    discover_multi_region_subnets,
+    discover_multi_region_route_tables,
+    discover_multi_region_gateways,
+    discover_multi_region_vpc_endpoints,
     execute_security_group_control,
     NetworkControlExecutionError,
     validate_aws_region as validate_network_region,
@@ -2042,6 +2046,35 @@ def list_subnets(
         search = search.default
 
     ctx = _resolve_network_account_and_client(account_id, region, current_user)
+
+    if ctx["target_region"] == "all":
+        try:
+            discovery_result = discover_multi_region_subnets(
+                session=ctx["session"],
+                max_records_per_region=max_records,
+                search=search,
+            )
+        except NetworkControlExecutionError as net_err:
+            raise HTTPException(status_code=net_err.status_code, detail=net_err.public_message)
+        except Exception as exc:
+            logger.error("Multi-region Subnet discovery error: %s", exc)
+            raise HTTPException(status_code=502, detail="Failed to complete multi-region Subnet discovery.")
+
+        return {
+            "status": "success",
+            "account_id": str(ctx["aws_account"].get("_id", account_id)),
+            "aws_account_id": ctx["stored_aws_account_id"],
+            "account_name": ctx["aws_account"].get("account_name"),
+            "region": "all",
+            "total_count": discovery_result["total_count"],
+            "summary": discovery_result["summary"],
+            "subnets": discovery_result["subnets"],
+            "coverage": discovery_result["coverage"],
+            "regional_failures": discovery_result["regional_failures"],
+            "successful_regions": discovery_result["successful_regions"],
+            "retrieved_at": discovery_result["retrieved_at"],
+        }
+
     try:
         result = query_subnets(
             ctx["ec2_client"],
@@ -2174,6 +2207,35 @@ def list_route_tables(
         search = search.default
 
     ctx = _resolve_network_account_and_client(account_id, region, current_user)
+
+    if ctx["target_region"] == "all":
+        try:
+            discovery_result = discover_multi_region_route_tables(
+                session=ctx["session"],
+                max_records_per_region=max_records,
+                search=search,
+            )
+        except NetworkControlExecutionError as net_err:
+            raise HTTPException(status_code=net_err.status_code, detail=net_err.public_message)
+        except Exception as exc:
+            logger.error("Multi-region Route Table discovery error: %s", exc)
+            raise HTTPException(status_code=502, detail="Failed to complete multi-region Route Table discovery.")
+
+        return {
+            "status": "success",
+            "account_id": str(ctx["aws_account"].get("_id", account_id)),
+            "aws_account_id": ctx["stored_aws_account_id"],
+            "account_name": ctx["aws_account"].get("account_name"),
+            "region": "all",
+            "total_count": discovery_result["total_count"],
+            "summary": discovery_result["summary"],
+            "route_tables": discovery_result["route_tables"],
+            "coverage": discovery_result["coverage"],
+            "regional_failures": discovery_result["regional_failures"],
+            "successful_regions": discovery_result["successful_regions"],
+            "retrieved_at": discovery_result["retrieved_at"],
+        }
+
     try:
         result = query_route_tables(
             ctx["ec2_client"],
@@ -2223,6 +2285,35 @@ def list_gateways(
         search = search.default
 
     ctx = _resolve_network_account_and_client(account_id, region, current_user)
+
+    if ctx["target_region"] == "all":
+        try:
+            discovery_result = discover_multi_region_gateways(
+                session=ctx["session"],
+                max_records_per_region=max_records,
+                search=search,
+            )
+        except NetworkControlExecutionError as net_err:
+            raise HTTPException(status_code=net_err.status_code, detail=net_err.public_message)
+        except Exception as exc:
+            logger.error("Multi-region Gateways discovery error: %s", exc)
+            raise HTTPException(status_code=502, detail="Failed to complete multi-region Gateways discovery.")
+
+        return {
+            "status": "success",
+            "account_id": str(ctx["aws_account"].get("_id", account_id)),
+            "aws_account_id": ctx["stored_aws_account_id"],
+            "account_name": ctx["aws_account"].get("account_name"),
+            "region": "all",
+            "total_count": discovery_result["total_count"],
+            "summary": discovery_result["summary"],
+            "gateways": discovery_result["gateways"],
+            "coverage": discovery_result["coverage"],
+            "regional_failures": discovery_result["regional_failures"],
+            "successful_regions": discovery_result["successful_regions"],
+            "retrieved_at": discovery_result["retrieved_at"],
+        }
+
     try:
         result = query_gateways(
             ctx["ec2_client"],
@@ -2272,6 +2363,35 @@ def list_vpc_endpoints(
         search = search.default
 
     ctx = _resolve_network_account_and_client(account_id, region, current_user)
+
+    if ctx["target_region"] == "all":
+        try:
+            discovery_result = discover_multi_region_vpc_endpoints(
+                session=ctx["session"],
+                max_records_per_region=max_records,
+                search=search,
+            )
+        except NetworkControlExecutionError as net_err:
+            raise HTTPException(status_code=net_err.status_code, detail=net_err.public_message)
+        except Exception as exc:
+            logger.error("Multi-region VPC Endpoints discovery error: %s", exc)
+            raise HTTPException(status_code=502, detail="Failed to complete multi-region VPC Endpoints discovery.")
+
+        return {
+            "status": "success",
+            "account_id": str(ctx["aws_account"].get("_id", account_id)),
+            "aws_account_id": ctx["stored_aws_account_id"],
+            "account_name": ctx["aws_account"].get("account_name"),
+            "region": "all",
+            "total_count": discovery_result["total_count"],
+            "summary": discovery_result["summary"],
+            "endpoints": discovery_result["endpoints"],
+            "coverage": discovery_result["coverage"],
+            "regional_failures": discovery_result["regional_failures"],
+            "successful_regions": discovery_result["successful_regions"],
+            "retrieved_at": discovery_result["retrieved_at"],
+        }
+
     try:
         result = query_vpc_endpoints(
             ctx["ec2_client"],

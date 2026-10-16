@@ -3,7 +3,7 @@
 # Production / Commercial SaaS Foundation
 # ============================================================
 
-from datetime import datetime
+from datetime import datetime, timezone
 import hashlib
 import logging
 from typing import Optional
@@ -51,6 +51,7 @@ from pydantic import BaseModel
 
 from app.services.ec2_inventory_service import (
     fetch_ec2_instances_inventory,
+    discover_multi_region_ec2_inventory,
     validate_aws_region,
 )
 
@@ -69,6 +70,8 @@ from app.services.s3_control_service import (
 from app.services.rds_control_service import (
     fetch_rds_instances_inventory,
     fetch_rds_clusters_inventory,
+    discover_multi_region_rds_inventory,
+    discover_multi_region_rds_clusters,
     execute_rds_instance_action,
     RDSControlExecutionError,
     validate_aws_region as validate_rds_region,
@@ -81,6 +84,8 @@ from app.services.network_control_service import (
     query_route_tables,
     query_gateways,
     query_vpc_endpoints,
+    discover_multi_region_vpcs,
+    discover_multi_region_security_groups,
     execute_security_group_control,
     NetworkControlExecutionError,
     validate_aws_region as validate_network_region,
@@ -937,10 +942,10 @@ def list_ec2_instances(
     # Validate region parameter upfront if explicitly provided
     if region is not None:
         target_region = str(region).strip()
-        if not validate_aws_region(target_region):
+        if not validate_aws_region(target_region, allow_all=True):
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid AWS region '{region}'. Region must match standard format like 'us-east-1', 'ap-south-1'.",
+                detail=f"Invalid AWS region '{region}'. Region must match standard format like 'us-east-1', 'ap-south-1', or 'all'.",
             )
     else:
         target_region = None
@@ -956,10 +961,16 @@ def list_ec2_instances(
             detail="AWS Account not found.",
         )
 
+    if aws_account.get("status") == "disconnected":
+        raise HTTPException(
+            status_code=400,
+            detail="AWS account is disconnected. Please reconnect or verify the account.",
+        )
+
     # Fall back to account's configured region if not explicitly specified
     if target_region is None:
         target_region = str(aws_account.get("region") or "ap-south-1").strip()
-        if not validate_aws_region(target_region):
+        if not validate_aws_region(target_region, allow_all=True):
             target_region = "ap-south-1"
 
     role_arn = _safe_string(aws_account.get("role_arn"))
@@ -969,11 +980,13 @@ def list_ec2_instances(
             detail="AWS account is missing configured role_arn.",
         )
 
+    assume_region = "us-east-1" if target_region == "all" else target_region
+
     # Assume AWS IAM role with temporary credentials
     try:
         session = assume_aws_role(
             role_arn,
-            region=target_region,
+            region=assume_region,
             external_id=aws_account.get("external_id"),
         )
     except Exception as assume_err:
@@ -1003,6 +1016,53 @@ def list_ec2_instances(
             status_code=403,
             detail="Unable to verify AWS account identity.",
         )
+
+    # Multi-Region Discovery flow
+    if target_region == "all":
+        try:
+            discovery_result = discover_multi_region_ec2_inventory(
+                session=session,
+                max_results_per_region=max_results,
+            )
+        except ClientError as client_err:
+            code = client_err.response.get("Error", {}).get("Code", "AWS_CLIENT_ERROR")
+            if code in ("AccessDenied", "UnauthorizedOperation"):
+                raise HTTPException(
+                    status_code=403,
+                    detail="AWS AccessDenied: The IAM role lacks ec2:DescribeInstances permission across regions.",
+                )
+            elif code in ("RequestLimitExceeded", "Throttling"):
+                raise HTTPException(
+                    status_code=429,
+                    detail="AWS EC2 request rate limit exceeded. Please retry after a brief pause.",
+                )
+            else:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"AWS EC2 multi-region discovery error ({code}).",
+                )
+        except Exception as exc:
+            logger.error("Multi-region EC2 discovery error: %s", exc)
+            raise HTTPException(
+                status_code=502,
+                detail="Failed to complete multi-region EC2 discovery.",
+            )
+
+        return {
+            "status": "success",
+            "account_id": str(aws_account.get("_id", clean_account_id)),
+            "aws_account_id": stored_aws_account_id,
+            "account_name": aws_account.get("account_name"),
+            "region": "all",
+            "regional_scope": "Multi-region discovery across standard AWS regions.",
+            "total_count": discovery_result["total_count"],
+            "instances": discovery_result["instances"],
+            "coverage": discovery_result["coverage"],
+            "regional_failures": discovery_result["regional_failures"],
+            "successful_regions": discovery_result["successful_regions"],
+            "retrieved_at": discovery_result["retrieved_at"],
+            "next_token": None,
+        }
 
     clients = get_aws_clients(session)
     ec2_client = clients.get("ec2")
@@ -1052,6 +1112,9 @@ def list_ec2_instances(
         "regional_scope": f"Single-region inventory for {target_region}. Pass ?region=<region> to inspect other regions.",
         "total_count": inventory_result["total_count"],
         "instances": inventory_result["instances"],
+        "coverage": "COMPLETE",
+        "regional_failures": [],
+        "retrieved_at": datetime.now(timezone.utc).isoformat(),
         "next_token": inventory_result.get("next_token"),
     }
 
@@ -1186,10 +1249,12 @@ def list_s3_buckets(
 
     if region is not None:
         target_region = str(region).strip()
-        if not validate_s3_region(target_region):
+        if target_region.lower() == "all":
+            target_region = None
+        elif not validate_s3_region(target_region):
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid AWS region '{region}'. Region must match standard format like 'us-east-1', 'ap-south-1'.",
+                detail=f"Invalid AWS region '{region}'. Region must match standard format like 'us-east-1', 'ap-south-1', or 'all'.",
             )
     else:
         target_region = None
@@ -1203,6 +1268,12 @@ def list_s3_buckets(
         raise HTTPException(
             status_code=404,
             detail="AWS Account not found.",
+        )
+
+    if aws_account.get("status") == "disconnected":
+        raise HTTPException(
+            status_code=400,
+            detail="AWS account is disconnected. Please reconnect or verify the account.",
         )
 
     stored_aws_account_id = _safe_string(
@@ -1288,6 +1359,7 @@ def list_s3_buckets(
         "summary": inventory_result["summary"],
         "coverage": inventory_result["coverage"],
         "buckets": inventory_result["buckets"],
+        "retrieved_at": datetime.now(timezone.utc).isoformat(),
         "next_token": inventory_result.get("next_token"),
     }
 
@@ -1419,16 +1491,22 @@ def list_rds_instances(
             detail="AWS Account not found.",
         )
 
+    if aws_account.get("status") == "disconnected":
+        raise HTTPException(
+            status_code=400,
+            detail="AWS account is disconnected. Please reconnect or verify the account.",
+        )
+
     if region is not None:
         target_region = str(region).strip()
-        if not validate_rds_region(target_region):
+        if not validate_rds_region(target_region, allow_all=True):
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid AWS region '{region}'. Region must match standard format like 'us-east-1', 'ap-south-1'.",
+                detail=f"Invalid AWS region '{region}'. Region must match standard format like 'us-east-1', 'ap-south-1', or 'all'.",
             )
     else:
         target_region = str(aws_account.get("region") or "us-east-1").strip()
-        if not validate_rds_region(target_region):
+        if not validate_rds_region(target_region, allow_all=True):
             target_region = "us-east-1"
 
     stored_aws_account_id = _safe_string(
@@ -1441,11 +1519,13 @@ def list_rds_instances(
             detail="AWS account is missing configured role_arn.",
         )
 
+    assume_region = "us-east-1" if target_region == "all" else target_region
+
     # Assume AWS IAM role with temporary credentials
     try:
         session = assume_aws_role(
             role_arn,
-            region=target_region,
+            region=assume_region,
             external_id=aws_account.get("external_id"),
         )
     except Exception as assume_err:
@@ -1472,6 +1552,45 @@ def list_rds_instances(
             status_code=403,
             detail="Unable to verify AWS account identity.",
         )
+
+    # Multi-Region Discovery flow for RDS Instances
+    if target_region == "all":
+        try:
+            discovery_result = discover_multi_region_rds_inventory(
+                session=session,
+                max_records_per_region=max_records,
+                search=search,
+                engine_filter=engine,
+                status_filter=status,
+            )
+        except RDSControlExecutionError as rds_err:
+            raise HTTPException(
+                status_code=rds_err.status_code,
+                detail=rds_err.public_message,
+            )
+        except Exception as exc:
+            logger.error("Multi-region RDS discovery error: %s", exc)
+            raise HTTPException(
+                status_code=502,
+                detail="Failed to complete multi-region RDS discovery.",
+            )
+
+        return {
+            "status": "success",
+            "account_id": str(aws_account.get("_id", clean_account_id)),
+            "aws_account_id": stored_aws_account_id,
+            "account_name": aws_account.get("account_name"),
+            "region": "all",
+            "regional_scope": "Multi-region discovery across standard AWS regions.",
+            "total_count": discovery_result["total_count"],
+            "summary": discovery_result["summary"],
+            "coverage": discovery_result["coverage"],
+            "regional_failures": discovery_result["regional_failures"],
+            "successful_regions": discovery_result["successful_regions"],
+            "instances": discovery_result["instances"],
+            "retrieved_at": discovery_result["retrieved_at"],
+            "next_token": None,
+        }
 
     clients = get_aws_clients(session)
     rds_client = clients.get("rds")
@@ -1515,6 +1634,8 @@ def list_rds_instances(
         "summary": inventory_result["summary"],
         "coverage": inventory_result["coverage"],
         "instances": inventory_result["instances"],
+        "regional_failures": [],
+        "retrieved_at": datetime.now(timezone.utc).isoformat(),
         "next_token": inventory_result.get("next_token"),
     }
 
@@ -1562,16 +1683,22 @@ def list_rds_clusters(
             detail="AWS Account not found.",
         )
 
+    if aws_account.get("status") == "disconnected":
+        raise HTTPException(
+            status_code=400,
+            detail="AWS account is disconnected. Please reconnect or verify the account.",
+        )
+
     if region is not None:
         target_region = str(region).strip()
-        if not validate_rds_region(target_region):
+        if not validate_rds_region(target_region, allow_all=True):
             raise HTTPException(
                 status_code=400,
                 detail=f"Invalid AWS region '{region}'.",
             )
     else:
         target_region = str(aws_account.get("region") or "us-east-1").strip()
-        if not validate_rds_region(target_region):
+        if not validate_rds_region(target_region, allow_all=True):
             target_region = "us-east-1"
 
     stored_aws_account_id = _safe_string(
@@ -1584,10 +1711,12 @@ def list_rds_clusters(
             detail="AWS account is missing configured role_arn.",
         )
 
+    assume_region = "us-east-1" if target_region == "all" else target_region
+
     try:
         session = assume_aws_role(
             role_arn,
-            region=target_region,
+            region=assume_region,
             external_id=aws_account.get("external_id"),
         )
         verify_aws_account(session, stored_aws_account_id)
@@ -1595,6 +1724,39 @@ def list_rds_clusters(
         raise HTTPException(status_code=403, detail=str(perm_err))
     except Exception as err:
         raise HTTPException(status_code=403, detail="Unable to verify AWS account identity.")
+
+    # Multi-Region Discovery flow for RDS Clusters
+    if target_region == "all":
+        try:
+            discovery_result = discover_multi_region_rds_clusters(
+                session=session,
+                max_records_per_region=max_records,
+            )
+        except RDSControlExecutionError as rds_err:
+            raise HTTPException(
+                status_code=rds_err.status_code,
+                detail=rds_err.public_message,
+            )
+        except Exception as exc:
+            logger.error("Multi-region RDS cluster discovery error: %s", exc)
+            raise HTTPException(
+                status_code=502,
+                detail="Failed to complete multi-region RDS cluster discovery.",
+            )
+
+        return {
+            "status": "success",
+            "account_id": str(aws_account.get("_id", clean_account_id)),
+            "aws_account_id": stored_aws_account_id,
+            "region": "all",
+            "total_count": discovery_result["total_count"],
+            "clusters": discovery_result["clusters"],
+            "coverage": discovery_result["coverage"],
+            "regional_failures": discovery_result["regional_failures"],
+            "successful_regions": discovery_result["successful_regions"],
+            "retrieved_at": discovery_result["retrieved_at"],
+            "next_token": None,
+        }
 
     clients = get_aws_clients(session)
     rds_client = clients.get("rds")
@@ -1620,6 +1782,9 @@ def list_rds_clusters(
         "region": target_region,
         "total_count": cluster_result["total_count"],
         "clusters": cluster_result["clusters"],
+        "coverage": "COMPLETE",
+        "regional_failures": [],
+        "retrieved_at": datetime.now(timezone.utc).isoformat(),
         "next_token": cluster_result.get("next_token"),
     }
 
@@ -1717,16 +1882,22 @@ def _resolve_network_account_and_client(
             detail="AWS Account not found.",
         )
 
+    if aws_account.get("status") == "disconnected":
+        raise HTTPException(
+            status_code=400,
+            detail="AWS account is disconnected. Please reconnect or verify the account.",
+        )
+
     if region is not None:
         target_region = str(region).strip()
-        if not validate_network_region(target_region):
+        if not validate_network_region(target_region, allow_all=True):
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid AWS region '{region}'. Region must match standard format like 'us-east-1', 'ap-south-1'.",
+                detail=f"Invalid AWS region '{region}'. Region must match standard format like 'us-east-1', 'ap-south-1', or 'all'.",
             )
     else:
         target_region = str(aws_account.get("region") or "us-east-1").strip()
-        if not validate_network_region(target_region):
+        if not validate_network_region(target_region, allow_all=True):
             target_region = "us-east-1"
 
     stored_aws_account_id = _safe_string(
@@ -1739,10 +1910,12 @@ def _resolve_network_account_and_client(
             detail="AWS account is missing configured role_arn.",
         )
 
+    assume_region = "us-east-1" if target_region == "all" else target_region
+
     try:
         session = assume_aws_role(
             role_arn,
-            region=target_region,
+            region=assume_region,
             external_id=aws_account.get("external_id"),
         )
     except Exception as assume_err:
@@ -1771,6 +1944,7 @@ def _resolve_network_account_and_client(
         "stored_aws_account_id": stored_aws_account_id,
         "target_region": target_region,
         "ec2_client": ec2_client,
+        "session": session,
     }
 
 
@@ -1791,6 +1965,35 @@ def list_vpcs(
         search = search.default
 
     ctx = _resolve_network_account_and_client(account_id, region, current_user)
+
+    if ctx["target_region"] == "all":
+        try:
+            discovery_result = discover_multi_region_vpcs(
+                session=ctx["session"],
+                max_records_per_region=max_records,
+                search=search,
+            )
+        except NetworkControlExecutionError as net_err:
+            raise HTTPException(status_code=net_err.status_code, detail=net_err.public_message)
+        except Exception as exc:
+            logger.error("Multi-region VPC discovery error: %s", exc)
+            raise HTTPException(status_code=502, detail="Failed to complete multi-region VPC discovery.")
+
+        return {
+            "status": "success",
+            "account_id": str(ctx["aws_account"].get("_id", account_id)),
+            "aws_account_id": ctx["stored_aws_account_id"],
+            "account_name": ctx["aws_account"].get("account_name"),
+            "region": "all",
+            "total_count": discovery_result["total_count"],
+            "summary": discovery_result["summary"],
+            "vpcs": discovery_result["vpcs"],
+            "coverage": discovery_result["coverage"],
+            "regional_failures": discovery_result["regional_failures"],
+            "successful_regions": discovery_result["successful_regions"],
+            "retrieved_at": discovery_result["retrieved_at"],
+        }
+
     try:
         result = query_vpcs(
             ctx["ec2_client"],
@@ -1813,6 +2016,9 @@ def list_vpcs(
         "total_count": result["total_count"],
         "summary": result["summary"],
         "vpcs": result["vpcs"],
+        "coverage": "COMPLETE",
+        "regional_failures": [],
+        "retrieved_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -1859,6 +2065,9 @@ def list_subnets(
         "total_count": result["total_count"],
         "summary": result["summary"],
         "subnets": result["subnets"],
+        "coverage": "COMPLETE",
+        "regional_failures": [],
+        "retrieved_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -1885,6 +2094,36 @@ def list_security_groups(
         posture = posture.default
 
     ctx = _resolve_network_account_and_client(account_id, region, current_user)
+
+    if ctx["target_region"] == "all":
+        try:
+            discovery_result = discover_multi_region_security_groups(
+                session=ctx["session"],
+                max_records_per_region=max_records,
+                search=search,
+                posture_filter=posture,
+            )
+        except NetworkControlExecutionError as net_err:
+            raise HTTPException(status_code=net_err.status_code, detail=net_err.public_message)
+        except Exception as exc:
+            logger.error("Multi-region Security Group discovery error: %s", exc)
+            raise HTTPException(status_code=502, detail="Failed to complete multi-region Security Group discovery.")
+
+        return {
+            "status": "success",
+            "account_id": str(ctx["aws_account"].get("_id", account_id)),
+            "aws_account_id": ctx["stored_aws_account_id"],
+            "account_name": ctx["aws_account"].get("account_name"),
+            "region": "all",
+            "total_count": discovery_result["total_count"],
+            "summary": discovery_result["summary"],
+            "security_groups": discovery_result["security_groups"],
+            "coverage": discovery_result["coverage"],
+            "regional_failures": discovery_result["regional_failures"],
+            "successful_regions": discovery_result["successful_regions"],
+            "retrieved_at": discovery_result["retrieved_at"],
+        }
+
     try:
         result = query_security_groups(
             ctx["ec2_client"],
@@ -1909,6 +2148,9 @@ def list_security_groups(
         "total_count": result["total_count"],
         "summary": result["summary"],
         "security_groups": result["security_groups"],
+        "coverage": "COMPLETE",
+        "regional_failures": [],
+        "retrieved_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -1955,6 +2197,9 @@ def list_route_tables(
         "total_count": result["total_count"],
         "summary": result["summary"],
         "route_tables": result["route_tables"],
+        "coverage": "COMPLETE",
+        "regional_failures": [],
+        "retrieved_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -2001,6 +2246,9 @@ def list_gateways(
         "total_count": result["total_count"],
         "summary": result["summary"],
         "gateways": result["gateways"],
+        "coverage": "COMPLETE",
+        "regional_failures": [],
+        "retrieved_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -2047,6 +2295,9 @@ def list_vpc_endpoints(
         "total_count": result["total_count"],
         "summary": result["summary"],
         "endpoints": result["endpoints"],
+        "coverage": "COMPLETE",
+        "regional_failures": [],
+        "retrieved_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -3167,6 +3418,12 @@ def list_iam_inventory(
     if not aws_account:
         raise HTTPException(status_code=404, detail="AWS Account not found.")
 
+    if aws_account.get("status") == "disconnected":
+        raise HTTPException(
+            status_code=400,
+            detail="AWS account is disconnected. Please reconnect or verify the account.",
+        )
+
     stored_aws_account_id = _safe_string(aws_account.get("aws_account_id") or aws_account.get("account") or "")
     role_arn = _safe_string(aws_account.get("role_arn"))
     if not role_arn:
@@ -3191,6 +3448,22 @@ def list_iam_inventory(
 
     try:
         inventory_result = fetch_iam_inventory(iam_client, max_items=max_items, marker=marker)
+    except ClientError as client_err:
+        code = client_err.response.get("Error", {}).get("Code", "AWS_CLIENT_ERROR")
+        if code in ("AccessDenied", "UnauthorizedOperation", "AuthFailure"):
+            raise HTTPException(
+                status_code=403,
+                detail="AWS AccessDenied: The IAM role lacks IAM read permissions (iam:ListUsers, iam:ListRoles, etc.).",
+            )
+        elif code in ("RequestLimitExceeded", "Throttling"):
+            raise HTTPException(
+                status_code=429,
+                detail="AWS IAM request rate limit exceeded. Please retry after a brief pause.",
+            )
+        raise HTTPException(
+            status_code=502,
+            detail=f"AWS IAM service error ({code}).",
+        )
     except Exception as exc:
         logger.error("Unexpected error fetching IAM inventory: %s", exc)
         raise HTTPException(status_code=500, detail="An unexpected error occurred while inspecting IAM inventory.")
@@ -3201,6 +3474,9 @@ def list_iam_inventory(
         "aws_account_id": stored_aws_account_id,
         "account_name": aws_account.get("account_name"),
         "inventory": inventory_result,
+        "coverage": "COMPLETE",
+        "regional_failures": [],
+        "retrieved_at": datetime.now(timezone.utc).isoformat(),
     }
 
 class IAMActionRequest(BaseModel):

@@ -37,6 +37,7 @@ import {
 import "./RDSResources.css";
 
 const STANDARD_AWS_REGIONS = [
+  { id: "all", name: "All Regions (Multi-Region Discovery)" },
   { id: "us-east-1", name: "US East (N. Virginia) - us-east-1" },
   { id: "us-east-2", name: "US East (Ohio) - us-east-2" },
   { id: "us-west-1", name: "US West (N. California) - us-west-1" },
@@ -69,6 +70,8 @@ export default function RDSResources() {
   const [clusters, setClusters] = useState([]);
   const [summary, setSummary] = useState(null);
   const [totalCount, setTotalCount] = useState(0);
+  const [regionalFailures, setRegionalFailures] = useState([]);
+  const [coverage, setCoverage] = useState("COMPLETE");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [lastRefreshed, setLastRefreshed] = useState(null);
@@ -190,7 +193,9 @@ export default function RDSResources() {
           setSummary(d?.summary || null);
           setNextToken(d?.next_token || null);
           setCurrentToken(token);
-          setLastRefreshed(new Date());
+          setRegionalFailures(Array.isArray(d?.regional_failures) ? d.regional_failures : []);
+          setCoverage(d?.coverage || "COMPLETE");
+          setLastRefreshed(d?.retrieved_at ? new Date(d.retrieved_at) : new Date());
         } else {
           const msg =
             instData.reason?.response?.data?.detail ||
@@ -199,6 +204,7 @@ export default function RDSResources() {
           setError(msg);
           setInstances([]);
           setTotalCount(0);
+          setRegionalFailures([]);
         }
 
         if (clustData.status === "fulfilled") {
@@ -593,6 +599,53 @@ export default function RDSResources() {
           >
             <X size={15} />
           </button>
+        </div>
+      )}
+
+      {/* Partial Regional Failure Notice */}
+      {regionalFailures.length > 0 && !error && (
+        <div
+          className="rds-feedback-banner feedback-error"
+          role="alert"
+          style={{
+            background: "rgba(234, 179, 8, 0.12)",
+            borderColor: "rgba(234, 179, 8, 0.35)",
+            color: "#eab308",
+          }}
+        >
+          <AlertTriangle size={18} className="feedback-icon" style={{ color: "#eab308" }} />
+          <div className="feedback-content">
+            <p>
+              <strong>Partial Regional Discovery:</strong> Discovery succeeded in some regions, but encountered errors in {regionalFailures.length} region(s):{" "}
+              {regionalFailures.map((f) => `${f.region} (${f.code || "Error"})`).join(", ")}.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Disconnected Account Alert Banner */}
+      {currentAccount?.status === "disconnected" && (
+        <div
+          className="rds-error-banner"
+          role="alert"
+          style={{ borderColor: "rgba(239, 68, 68, 0.4)" }}
+        >
+          <div className="error-icon-box">
+            <AlertTriangle size={18} />
+          </div>
+          <div className="error-content">
+            <h4>AWS Account Disconnected</h4>
+            <p>
+              Account "{currentAccount?.account_name || selectedAccountId}" is disconnected. Please reconnect or verify the account to query real-time RDS database inventory.
+            </p>
+          </div>
+          <Link
+            to="/connect-aws"
+            className="rds-cta-btn"
+            style={{ padding: "6px 14px", fontSize: "13px" }}
+          >
+            Reconnect Account
+          </Link>
         </div>
       )}
 

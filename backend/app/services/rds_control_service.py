@@ -5,8 +5,11 @@
 
 from __future__ import annotations
 
+import concurrent.futures
+from datetime import datetime, timezone
 import logging
 import re
+import threading
 from typing import Any, Dict, List, Optional
 
 from botocore.exceptions import BotoCoreError, ClientError
@@ -24,12 +27,26 @@ from app.models.audit_log import (
 from app.models.aws_account import get_account
 from app.services.audit_log_service import record_event
 from app.services.aws_connection import (
+    AWS_CONFIG,
     assume_aws_role,
     get_aws_clients,
     verify_aws_account,
 )
 
 logger = logging.getLogger("cloudguardai.rds_controls")
+
+STANDARD_AWS_REGIONS = [
+    "ap-south-1",
+    "us-east-1",
+    "us-east-2",
+    "us-west-1",
+    "us-west-2",
+    "eu-west-1",
+    "eu-central-1",
+    "ap-southeast-1",
+    "ap-northeast-1",
+    "sa-east-1",
+]
 
 # AWS RDS Identifier naming rules: 1-63 chars, letters, numbers, hyphens, no trailing hyphen, no consecutive hyphens
 RDS_IDENTIFIER_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9-]{0,62}$")
@@ -78,11 +95,14 @@ def is_valid_rds_identifier(identifier: str) -> bool:
     )
 
 
-def validate_aws_region(region: Optional[str]) -> bool:
+def validate_aws_region(region: Optional[str], allow_all: bool = False) -> bool:
     """Validate that the region string conforms to standard AWS region naming."""
     if not region or not isinstance(region, str):
         return False
-    return bool(AWS_REGION_REGEX.match(region.strip()))
+    reg = region.strip().lower()
+    if allow_all and reg == "all":
+        return True
+    return bool(AWS_REGION_REGEX.match(reg))
 
 
 def _safe_string(val: Any) -> str:
@@ -452,6 +472,210 @@ def fetch_rds_clusters_inventory(
         "clusters": clusters,
         "next_token": response.get("Marker"),
     }
+
+
+def discover_multi_region_rds_inventory(
+    session: Any,
+    regions: Optional[List[str]] = None,
+    max_records_per_region: Optional[int] = 50,
+    timeout_per_region: float = 6.0,
+    max_workers: int = 5,
+    search: Optional[str] = None,
+    engine_filter: Optional[str] = None,
+    status_filter: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Perform bounded, concurrent multi-region RDS DB instance discovery.
+    """
+    if session is None:
+        raise ValueError("AWS session is required for multi-region RDS discovery.")
+
+    target_regions = [r.strip() for r in (regions or STANDARD_AWS_REGIONS) if r and isinstance(r, str)]
+    all_instances: List[Dict[str, Any]] = []
+    regional_failures: List[Dict[str, Any]] = []
+    successful_regions: List[str] = []
+
+    client_lock = threading.Lock()
+
+    def _query_region(reg: str) -> Dict[str, Any]:
+        with client_lock:
+            client = session.client("rds", region_name=reg, config=AWS_CONFIG)
+        return fetch_rds_instances_inventory(
+            rds_client=client,
+            region=reg,
+            max_records=max_records_per_region,
+            all_pages=True,
+            search=search,
+            engine_filter=engine_filter,
+            status_filter=status_filter,
+        )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_region = {
+            executor.submit(_query_region, r): r
+            for r in target_regions
+        }
+        for future in concurrent.futures.as_completed(future_to_region):
+            r = future_to_region[future]
+            try:
+                result = future.result(timeout=timeout_per_region)
+                all_instances.extend(result.get("instances", []))
+                successful_regions.append(r)
+            except RDSControlExecutionError as rds_err:
+                regional_failures.append({
+                    "region": r,
+                    "code": rds_err.code,
+                    "error": rds_err.public_message,
+                })
+            except ClientError as ce:
+                code = ce.response.get("Error", {}).get("Code", "AWS_CLIENT_ERROR")
+                msg = ce.response.get("Error", {}).get("Message", str(ce))
+                regional_failures.append({
+                    "region": r,
+                    "code": code,
+                    "error": f"[{code}] {msg}",
+                })
+            except TimeoutError:
+                regional_failures.append({
+                    "region": r,
+                    "code": "TimeoutError",
+                    "error": f"Discovery timed out after {timeout_per_region}s for region {r}.",
+                })
+            except Exception as exc:
+                regional_failures.append({
+                    "region": r,
+                    "code": type(exc).__name__,
+                    "error": str(exc),
+                })
+
+    if (
+        len(regional_failures) == len(target_regions)
+        and all(f.get("code") in ("AWS_ACCESS_DENIED", "AccessDenied", "UnauthorizedOperation") for f in regional_failures)
+    ):
+        raise RDSControlExecutionError(
+            status_code=403,
+            code="AWS_ACCESS_DENIED",
+            category="PERMISSION_DENIED",
+            message="AWS AccessDenied: The IAM role lacks rds:DescribeDBInstances permission across all queried regions.",
+        )
+
+    all_instances.sort(key=lambda x: (x.get("region", ""), x.get("db_instance_identifier", "")))
+    coverage = "COMPLETE" if not regional_failures else "PARTIAL"
+
+    summary = {
+        "total_instances": len(all_instances),
+        "running": sum(1 for i in all_instances if i.get("status") in ("available", "running")),
+        "stopped": sum(1 for i in all_instances if i.get("status") == "stopped"),
+        "public": sum(1 for i in all_instances if i.get("publicly_accessible")),
+        "encrypted": sum(1 for i in all_instances if i.get("storage_encrypted")),
+        "multi_az": sum(1 for i in all_instances if i.get("multi_az")),
+        "deletion_protected": sum(1 for i in all_instances if i.get("deletion_protection")),
+        "regions": successful_regions,
+    }
+
+    return {
+        "instances": all_instances,
+        "total_count": len(all_instances),
+        "summary": summary,
+        "regions_searched": target_regions,
+        "successful_regions": successful_regions,
+        "regional_failures": regional_failures,
+        "coverage": coverage,
+        "retrieved_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def discover_multi_region_rds_clusters(
+    session: Any,
+    regions: Optional[List[str]] = None,
+    max_records_per_region: Optional[int] = 50,
+    timeout_per_region: float = 6.0,
+    max_workers: int = 5,
+) -> Dict[str, Any]:
+    """
+    Perform bounded, concurrent multi-region RDS DB cluster discovery.
+    """
+    if session is None:
+        raise ValueError("AWS session is required for multi-region RDS cluster discovery.")
+
+    target_regions = [r.strip() for r in (regions or STANDARD_AWS_REGIONS) if r and isinstance(r, str)]
+    all_clusters: List[Dict[str, Any]] = []
+    regional_failures: List[Dict[str, Any]] = []
+    successful_regions: List[str] = []
+
+    client_lock = threading.Lock()
+
+    def _query_region(reg: str) -> Dict[str, Any]:
+        with client_lock:
+            client = session.client("rds", region_name=reg, config=AWS_CONFIG)
+        return fetch_rds_clusters_inventory(
+            rds_client=client,
+            region=reg,
+            max_records=max_records_per_region,
+        )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_region = {
+            executor.submit(_query_region, r): r
+            for r in target_regions
+        }
+        for future in concurrent.futures.as_completed(future_to_region):
+            r = future_to_region[future]
+            try:
+                result = future.result(timeout=timeout_per_region)
+                all_clusters.extend(result.get("clusters", []))
+                successful_regions.append(r)
+            except RDSControlExecutionError as rds_err:
+                regional_failures.append({
+                    "region": r,
+                    "code": rds_err.code,
+                    "error": rds_err.public_message,
+                })
+            except ClientError as ce:
+                code = ce.response.get("Error", {}).get("Code", "AWS_CLIENT_ERROR")
+                msg = ce.response.get("Error", {}).get("Message", str(ce))
+                regional_failures.append({
+                    "region": r,
+                    "code": code,
+                    "error": f"[{code}] {msg}",
+                })
+            except TimeoutError:
+                regional_failures.append({
+                    "region": r,
+                    "code": "TimeoutError",
+                    "error": f"Cluster discovery timed out after {timeout_per_region}s for region {r}.",
+                })
+            except Exception as exc:
+                regional_failures.append({
+                    "region": r,
+                    "code": type(exc).__name__,
+                    "error": str(exc),
+                })
+
+    if (
+        len(regional_failures) == len(target_regions)
+        and all(f.get("code") in ("AWS_ACCESS_DENIED", "AccessDenied", "UnauthorizedOperation") for f in regional_failures)
+    ):
+        raise RDSControlExecutionError(
+            status_code=403,
+            code="AWS_ACCESS_DENIED",
+            category="PERMISSION_DENIED",
+            message="AWS AccessDenied: The IAM role lacks rds:DescribeDBClusters permission across all queried regions.",
+        )
+
+    all_clusters.sort(key=lambda x: (x.get("region", ""), x.get("db_cluster_identifier", "")))
+    coverage = "COMPLETE" if not regional_failures else "PARTIAL"
+
+    return {
+        "clusters": all_clusters,
+        "total_count": len(all_clusters),
+        "regions_searched": target_regions,
+        "successful_regions": successful_regions,
+        "regional_failures": regional_failures,
+        "coverage": coverage,
+        "retrieved_at": datetime.now(timezone.utc).isoformat(),
+    }
+
 
 
 def execute_rds_instance_action(

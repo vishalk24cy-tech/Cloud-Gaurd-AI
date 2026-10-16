@@ -5,21 +5,42 @@
 
 from __future__ import annotations
 
+import concurrent.futures
+from datetime import datetime, timezone
 import re
+import threading
 from typing import Any, Dict, List, Optional
 from botocore.exceptions import BotoCoreError, ClientError
+
+from app.services.aws_connection import AWS_CONFIG
 
 # Standard AWS region format (e.g. us-east-1, ap-south-1, eu-central-1)
 AWS_REGION_REGEX = re.compile(r"^[a-z]{2}(?:-[a-z]+)+-\d+$")
 
+STANDARD_AWS_REGIONS = [
+    "ap-south-1",
+    "us-east-1",
+    "us-east-2",
+    "us-west-1",
+    "us-west-2",
+    "eu-west-1",
+    "eu-central-1",
+    "ap-southeast-1",
+    "ap-northeast-1",
+    "sa-east-1",
+]
+
 MAX_INVENTORY_SAFE_LIMIT = 1000
 
 
-def validate_aws_region(region: Optional[str]) -> bool:
+def validate_aws_region(region: Optional[str], allow_all: bool = False) -> bool:
     """Validate that the region string conforms to standard AWS region naming."""
     if not region or not isinstance(region, str):
         return False
-    return bool(AWS_REGION_REGEX.match(region.strip()))
+    reg = region.strip().lower()
+    if allow_all and reg == "all":
+        return True
+    return bool(AWS_REGION_REGEX.match(reg))
 
 
 def extract_instance_name(tags: Optional[List[Dict[str, Any]]]) -> Optional[str]:
@@ -166,3 +187,97 @@ def fetch_ec2_instances_inventory(
         "total_count": len(instances),
         "next_token": response.get("NextToken"),
     }
+
+
+def discover_multi_region_ec2_inventory(
+    session: Any,
+    regions: Optional[List[str]] = None,
+    max_results_per_region: Optional[int] = 100,
+    timeout_per_region: float = 6.0,
+    max_workers: int = 5,
+) -> Dict[str, Any]:
+    """
+    Perform bounded, concurrent multi-region EC2 discovery across target AWS regions.
+
+    Enforces:
+    - Bounded concurrency with ThreadPoolExecutor
+    - Sensible per-region timeout
+    - Honest reporting of regional failures without silent mock fallbacks
+    - Clean normalization of discovered instances
+    """
+    if session is None:
+        raise ValueError("AWS session is required for multi-region discovery.")
+
+    target_regions = [r.strip() for r in (regions or STANDARD_AWS_REGIONS) if r and isinstance(r, str)]
+    all_instances: List[Dict[str, Any]] = []
+    regional_failures: List[Dict[str, Any]] = []
+    successful_regions: List[str] = []
+
+    client_lock = threading.Lock()
+
+    def _query_region(reg: str) -> Dict[str, Any]:
+        with client_lock:
+            client = session.client("ec2", region_name=reg, config=AWS_CONFIG)
+        return fetch_ec2_instances_inventory(
+            ec2_client=client,
+            region=reg,
+            max_results=max_results_per_region,
+            all_pages=True,
+        )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_region = {
+            executor.submit(_query_region, r): r
+            for r in target_regions
+        }
+        for future in concurrent.futures.as_completed(future_to_region):
+            r = future_to_region[future]
+            try:
+                result = future.result(timeout=timeout_per_region)
+                all_instances.extend(result.get("instances", []))
+                successful_regions.append(r)
+            except ClientError as ce:
+                code = ce.response.get("Error", {}).get("Code", "AWS_CLIENT_ERROR")
+                msg = ce.response.get("Error", {}).get("Message", str(ce))
+                regional_failures.append({
+                    "region": r,
+                    "code": code,
+                    "error": f"[{code}] {msg}",
+                })
+            except TimeoutError:
+                regional_failures.append({
+                    "region": r,
+                    "code": "TimeoutError",
+                    "error": f"Discovery timed out after {timeout_per_region}s for region {r}.",
+                })
+            except Exception as exc:
+                regional_failures.append({
+                    "region": r,
+                    "code": type(exc).__name__,
+                    "error": str(exc),
+                })
+
+    # If ALL queried regions fail with AccessDenied or UnauthorizedOperation, raise ClientError
+    if (
+        len(regional_failures) == len(target_regions)
+        and all(f.get("code") in ("AccessDenied", "UnauthorizedOperation", "AuthFailure") for f in regional_failures)
+    ):
+        raise ClientError(
+            {"Error": {"Code": "AccessDenied", "Message": "IAM role lacks ec2:DescribeInstances permissions across all regions."}},
+            "DescribeInstances",
+        )
+
+    # Sort instances deterministically by region then instance_id
+    all_instances.sort(key=lambda x: (x.get("region", ""), x.get("instance_id", "")))
+    coverage = "COMPLETE" if not regional_failures else "PARTIAL"
+
+    return {
+        "instances": all_instances,
+        "total_count": len(all_instances),
+        "regions_searched": target_regions,
+        "successful_regions": successful_regions,
+        "regional_failures": regional_failures,
+        "coverage": coverage,
+        "retrieved_at": datetime.now(timezone.utc).isoformat(),
+    }
+

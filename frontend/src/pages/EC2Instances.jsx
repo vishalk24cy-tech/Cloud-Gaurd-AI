@@ -29,6 +29,7 @@ import {
 import "./EC2Instances.css";
 
 const STANDARD_AWS_REGIONS = [
+  { id: "all", name: "All Regions (Multi-Region Discovery)" },
   { id: "ap-south-1", name: "Asia Pacific (Mumbai) - ap-south-1" },
   { id: "us-east-1", name: "US East (N. Virginia) - us-east-1" },
   { id: "us-east-2", name: "US East (Ohio) - us-east-2" },
@@ -60,6 +61,8 @@ export default function EC2Instances() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [regionalScopeNotice, setRegionalScopeNotice] = useState("");
+  const [regionalFailures, setRegionalFailures] = useState([]);
+  const [coverage, setCoverage] = useState("COMPLETE");
   const [lastRefreshed, setLastRefreshed] = useState(null);
 
   // Pagination state
@@ -169,7 +172,9 @@ export default function EC2Instances() {
         setTotalCount(data.total_count ?? (data.instances?.length || 0));
         setNextToken(data.next_token || null);
         setRegionalScopeNotice(data.regional_scope || "");
-        setLastRefreshed(new Date());
+        setRegionalFailures(Array.isArray(data.regional_failures) ? data.regional_failures : []);
+        setCoverage(data.coverage || "COMPLETE");
+        setLastRefreshed(data.retrieved_at ? new Date(data.retrieved_at) : new Date());
       } catch (err) {
         if (requestId !== latestRequestIdRef.current) {
           return;
@@ -530,6 +535,51 @@ export default function EC2Instances() {
               • Updated: {lastRefreshed.toLocaleTimeString()}
             </span>
           )}
+        </div>
+      )}
+
+      {/* Partial Regional Failure Notice */}
+      {regionalFailures.length > 0 && !error && (
+        <div
+          className="ec2-scope-banner"
+          role="alert"
+          style={{
+            background: "rgba(234, 179, 8, 0.12)",
+            borderColor: "rgba(234, 179, 8, 0.35)",
+            color: "#eab308",
+          }}
+        >
+          <AlertTriangle size={15} style={{ flexShrink: 0 }} />
+          <span>
+            <strong>Partial Regional Discovery:</strong> Discovery succeeded in some regions, but encountered errors in {regionalFailures.length} region(s):{" "}
+            {regionalFailures.map((f) => `${f.region} (${f.code || "Error"})`).join(", ")}.
+          </span>
+        </div>
+      )}
+
+      {/* Disconnected Account Alert Banner */}
+      {currentAccount?.status === "disconnected" && (
+        <div
+          className="ec2-error-banner"
+          role="alert"
+          style={{ borderColor: "rgba(239, 68, 68, 0.4)" }}
+        >
+          <div className="error-icon-box">
+            <AlertTriangle size={18} />
+          </div>
+          <div className="error-content">
+            <h4>AWS Account Disconnected</h4>
+            <p>
+              Account "{currentAccount?.account_name || selectedAccountId}" is disconnected. Please reconnect or verify the account to query real-time AWS inventory.
+            </p>
+          </div>
+          <Link
+            to="/connect-aws"
+            className="ec2-cta-btn"
+            style={{ padding: "6px 14px", fontSize: "13px" }}
+          >
+            Reconnect Account
+          </Link>
         </div>
       )}
 

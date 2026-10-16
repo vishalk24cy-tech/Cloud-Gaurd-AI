@@ -593,6 +593,19 @@ export default function S3Resources() {
         </div>
       )}
 
+      {/* Account Disconnected Warning Banner */}
+      {currentAccount && currentAccount.status === "disconnected" && (
+        <div className="s3-error-banner" role="alert" style={{ background: "rgba(239, 68, 68, 0.15)", borderColor: "rgba(239, 68, 68, 0.4)" }}>
+          <div className="error-icon-box">
+            <AlertTriangle size={18} className="text-red" />
+          </div>
+          <div className="error-content">
+            <h4>AWS Account Disconnected</h4>
+            <p>This AWS account is marked as disconnected. Reconnect or re-verify STS AssumeRole credentials in <Link to="/connect-aws" style={{ color: "#60a5fa", textDecoration: "underline" }}>Connect AWS</Link> to view live S3 buckets.</p>
+          </div>
+        </div>
+      )}
+
       {/* Error State Banner */}
       {error && (
         <div className="s3-error-banner" role="alert">

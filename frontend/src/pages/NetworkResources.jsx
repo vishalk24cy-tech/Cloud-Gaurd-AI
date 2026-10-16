@@ -41,6 +41,7 @@ import {
 import "./NetworkResources.css";
 
 const STANDARD_AWS_REGIONS = [
+  { id: "all", name: "All Regions (Multi-Region Discovery)" },
   { id: "us-east-1", name: "US East (N. Virginia) - us-east-1" },
   { id: "us-east-2", name: "US East (Ohio) - us-east-2" },
   { id: "us-west-1", name: "US West (N. California) - us-west-1" },
@@ -90,6 +91,8 @@ export default function NetworkResources() {
   // Loading & Error States
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [coverage, setCoverage] = useState("COMPLETE");
+  const [regionalFailures, setRegionalFailures] = useState([]);
 
   // Inspector Modal state
   const [inspectModal, setInspectModal] = useState({
@@ -180,36 +183,50 @@ export default function NetworkResources() {
           if (requestId !== latestRequestIdRef.current) return;
           setSecurityGroups(sgRes.security_groups || []);
           setSgSummary(sgRes.summary || null);
+          setCoverage(sgRes.coverage || "COMPLETE");
+          setRegionalFailures(sgRes.regional_failures || []);
         } else if (tabToFetch === "vpcs") {
           const vpcRes = await getVPCs(selectedAccountId, baseParams);
           if (requestId !== latestRequestIdRef.current) return;
           setVpcs(vpcRes.vpcs || []);
           setVpcSummary(vpcRes.summary || null);
+          setCoverage(vpcRes.coverage || "COMPLETE");
+          setRegionalFailures(vpcRes.regional_failures || []);
         } else if (tabToFetch === "subnets") {
           const subRes = await getSubnets(selectedAccountId, baseParams);
           if (requestId !== latestRequestIdRef.current) return;
           setSubnets(subRes.subnets || []);
           setSubnetSummary(subRes.summary || null);
+          setCoverage(subRes.coverage || "COMPLETE");
+          setRegionalFailures(subRes.regional_failures || []);
         } else if (tabToFetch === "route-tables") {
           const rtRes = await getRouteTables(selectedAccountId, baseParams);
           if (requestId !== latestRequestIdRef.current) return;
           setRouteTables(rtRes.route_tables || []);
           setRtSummary(rtRes.summary || null);
+          setCoverage(rtRes.coverage || "COMPLETE");
+          setRegionalFailures(rtRes.regional_failures || []);
         } else if (tabToFetch === "gateways") {
           const gwRes = await getGateways(selectedAccountId, baseParams);
           if (requestId !== latestRequestIdRef.current) return;
           setGateways(gwRes.gateways || []);
           setGwSummary(gwRes.summary || null);
+          setCoverage(gwRes.coverage || "COMPLETE");
+          setRegionalFailures(gwRes.regional_failures || []);
         } else if (tabToFetch === "endpoints") {
           const epRes = await getVPCEndpoints(selectedAccountId, baseParams);
           if (requestId !== latestRequestIdRef.current) return;
           setEndpoints(epRes.endpoints || []);
           setEpSummary(epRes.summary || null);
+          setCoverage(epRes.coverage || "COMPLETE");
+          setRegionalFailures(epRes.regional_failures || []);
         }
 
         setLastRefreshed(new Date());
       } catch (err) {
         if (requestId !== latestRequestIdRef.current) return;
+        setCoverage("FAILED");
+        setRegionalFailures([]);
         setError(
           err?.response?.data?.detail ||
             err?.message ||
@@ -643,6 +660,28 @@ export default function NetworkResources() {
           )}
         </div>
       </div>
+
+      {/* Account Disconnected Warning Banner */}
+      {currentAccount && currentAccount.status === "disconnected" && (
+        <div className="net-error-banner" role="alert" style={{ background: "rgba(239, 68, 68, 0.15)", borderColor: "rgba(239, 68, 68, 0.4)" }}>
+          <AlertCircle size={20} className="net-error-icon text-red" />
+          <div className="net-error-content">
+            <strong>AWS Account Disconnected</strong>
+            <p>This AWS account is marked as disconnected. Reconnect or re-verify STS AssumeRole credentials in <Link to="/connect-aws" style={{ color: "#60a5fa", textDecoration: "underline" }}>Connect AWS</Link> to view live network resources.</p>
+          </div>
+        </div>
+      )}
+
+      {/* Partial Coverage Warning Banner */}
+      {coverage === "PARTIAL" && regionalFailures.length > 0 && (
+        <div className="net-error-banner" role="alert" style={{ background: "rgba(245, 158, 11, 0.12)", borderColor: "rgba(245, 158, 11, 0.35)", color: "#fbbf24" }}>
+          <AlertTriangle size={20} className="net-error-icon text-amber" />
+          <div className="net-error-content" style={{ color: "#fef3c7" }}>
+            <strong>Multi-Region Discovery Partial Coverage</strong>
+            <p>Some regions failed during discovery or were inaccessible: {regionalFailures.map(f => `${f.region} (${f.error_code || 'Error'})`).join(", ")}. Displaying resources from available regions.</p>
+          </div>
+        </div>
+      )}
 
       {/* ======================================================
           ERROR BANNER

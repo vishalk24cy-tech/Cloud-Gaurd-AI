@@ -268,6 +268,14 @@ export default function IAMManagement() {
         </div>
       </div>
 
+      {currentAccount && currentAccount.status === "disconnected" && (
+        <div className="inventory-error" style={{ background: "rgba(239, 68, 68, 0.15)", borderColor: "rgba(239, 68, 68, 0.4)", marginBottom: "1.5rem" }}>
+          <AlertCircle size={32} />
+          <h3>AWS Account Disconnected</h3>
+          <p>This AWS account is marked as disconnected. Reconnect or re-verify STS AssumeRole credentials in <Link to="/connect-aws" style={{ color: "#60a5fa", textDecoration: "underline" }}>Connect AWS</Link> to view live IAM resources.</p>
+        </div>
+      )}
+
       {error ? (
         <div className="inventory-error">
           <AlertCircle size={40} />

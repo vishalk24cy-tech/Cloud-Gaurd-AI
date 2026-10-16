@@ -5,8 +5,11 @@
 
 from __future__ import annotations
 
+import concurrent.futures
+from datetime import datetime, timezone
 import logging
 import re
+import threading
 from typing import Any, Dict, List, Optional
 
 from botocore.exceptions import BotoCoreError, ClientError
@@ -24,12 +27,26 @@ from app.models.audit_log import (
 from app.models.aws_account import get_account
 from app.services.audit_log_service import record_event
 from app.services.aws_connection import (
+    AWS_CONFIG,
     assume_aws_role,
     get_aws_clients,
     verify_aws_account,
 )
 
 logger = logging.getLogger("cloudguardai.network_controls")
+
+STANDARD_AWS_REGIONS = [
+    "ap-south-1",
+    "us-east-1",
+    "us-east-2",
+    "us-west-1",
+    "us-west-2",
+    "eu-west-1",
+    "eu-central-1",
+    "ap-southeast-1",
+    "ap-northeast-1",
+    "sa-east-1",
+]
 
 # AWS Resource Identifier patterns
 VPC_ID_PATTERN = re.compile(r"^vpc-[0-9a-fA-F]{8,17}$")
@@ -107,10 +124,13 @@ def is_valid_vpc_endpoint_id(vpce_id: str) -> bool:
     return bool(VPC_ENDPOINT_ID_PATTERN.fullmatch(vpce_id.strip()))
 
 
-def validate_aws_region(region: Optional[str]) -> bool:
+def validate_aws_region(region: Optional[str], allow_all: bool = False) -> bool:
     if not region or not isinstance(region, str):
         return False
-    return bool(AWS_REGION_REGEX.match(region.strip()))
+    reg = region.strip().lower()
+    if allow_all and reg == "all":
+        return True
+    return bool(AWS_REGION_REGEX.match(reg))
 
 
 def _safe_string(val: Any) -> str:
@@ -804,6 +824,217 @@ def query_security_groups(
             "open_all_traffic_count": sum(1 for g in normalized if g["has_all_traffic_open"]),
             "region": region,
         },
+    }
+
+
+def discover_multi_region_vpcs(
+    session: Any,
+    regions: Optional[List[str]] = None,
+    max_records_per_region: Optional[int] = 50,
+    search: Optional[str] = None,
+    timeout_per_region: float = 6.0,
+    max_workers: int = 5,
+) -> Dict[str, Any]:
+    """
+    Perform bounded, concurrent multi-region VPC discovery.
+    """
+    if session is None:
+        raise ValueError("AWS session is required for multi-region VPC discovery.")
+
+    target_regions = [r.strip() for r in (regions or STANDARD_AWS_REGIONS) if r and isinstance(r, str)]
+    all_vpcs: List[Dict[str, Any]] = []
+    regional_failures: List[Dict[str, Any]] = []
+    successful_regions: List[str] = []
+
+    client_lock = threading.Lock()
+
+    def _query_region(reg: str) -> Dict[str, Any]:
+        with client_lock:
+            client = session.client("ec2", region_name=reg, config=AWS_CONFIG)
+        return query_vpcs(
+            ec2_client=client,
+            region=reg,
+            max_records=max_records_per_region,
+            search=search,
+        )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_region = {
+            executor.submit(_query_region, r): r
+            for r in target_regions
+        }
+        for future in concurrent.futures.as_completed(future_to_region):
+            r = future_to_region[future]
+            try:
+                result = future.result(timeout=timeout_per_region)
+                all_vpcs.extend(result.get("vpcs", []))
+                successful_regions.append(r)
+            except NetworkControlExecutionError as net_err:
+                regional_failures.append({
+                    "region": r,
+                    "code": net_err.code,
+                    "error": net_err.public_message,
+                })
+            except ClientError as ce:
+                code = ce.response.get("Error", {}).get("Code", "AWS_CLIENT_ERROR")
+                msg = ce.response.get("Error", {}).get("Message", str(ce))
+                regional_failures.append({
+                    "region": r,
+                    "code": code,
+                    "error": f"[{code}] {msg}",
+                })
+            except TimeoutError:
+                regional_failures.append({
+                    "region": r,
+                    "code": "TimeoutError",
+                    "error": f"VPC discovery timed out after {timeout_per_region}s for region {r}.",
+                })
+            except Exception as exc:
+                regional_failures.append({
+                    "region": r,
+                    "code": type(exc).__name__,
+                    "error": str(exc),
+                })
+
+    if (
+        len(regional_failures) == len(target_regions)
+        and all(f.get("code") in ("AWS_ACCESS_DENIED", "AccessDenied", "UnauthorizedOperation") for f in regional_failures)
+    ):
+        raise NetworkControlExecutionError(
+            status_code=403,
+            code="AWS_ACCESS_DENIED",
+            category="PERMISSION_DENIED",
+            message="AWS AccessDenied: The IAM role lacks ec2:DescribeVpcs permission across all queried regions.",
+        )
+
+    all_vpcs.sort(key=lambda x: (x.get("region", ""), x.get("vpc_id", "")))
+    coverage = "COMPLETE" if not regional_failures else "PARTIAL"
+
+    summary = {
+        "total_vpcs": len(all_vpcs),
+        "default_vpcs": sum(1 for v in all_vpcs if v.get("is_default")),
+        "custom_vpcs": sum(1 for v in all_vpcs if not v.get("is_default")),
+        "regions": successful_regions,
+    }
+
+    return {
+        "vpcs": all_vpcs,
+        "total_count": len(all_vpcs),
+        "summary": summary,
+        "regions_searched": target_regions,
+        "successful_regions": successful_regions,
+        "regional_failures": regional_failures,
+        "coverage": coverage,
+        "retrieved_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def discover_multi_region_security_groups(
+    session: Any,
+    regions: Optional[List[str]] = None,
+    max_records_per_region: Optional[int] = 50,
+    search: Optional[str] = None,
+    posture_filter: Optional[str] = None,
+    timeout_per_region: float = 6.0,
+    max_workers: int = 5,
+) -> Dict[str, Any]:
+    """
+    Perform bounded, concurrent multi-region Security Group discovery.
+    """
+    if session is None:
+        raise ValueError("AWS session is required for multi-region Security Group discovery.")
+
+    target_regions = [r.strip() for r in (regions or STANDARD_AWS_REGIONS) if r and isinstance(r, str)]
+    all_sgs: List[Dict[str, Any]] = []
+    regional_failures: List[Dict[str, Any]] = []
+    successful_regions: List[str] = []
+
+    client_lock = threading.Lock()
+
+    def _query_region(reg: str) -> Dict[str, Any]:
+        with client_lock:
+            client = session.client("ec2", region_name=reg, config=AWS_CONFIG)
+        return query_security_groups(
+            ec2_client=client,
+            region=reg,
+            max_records=max_records_per_region,
+            search=search,
+            posture_filter=posture_filter,
+        )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_region = {
+            executor.submit(_query_region, r): r
+            for r in target_regions
+        }
+        for future in concurrent.futures.as_completed(future_to_region):
+            r = future_to_region[future]
+            try:
+                result = future.result(timeout=timeout_per_region)
+                all_sgs.extend(result.get("security_groups", []))
+                successful_regions.append(r)
+            except NetworkControlExecutionError as net_err:
+                regional_failures.append({
+                    "region": r,
+                    "code": net_err.code,
+                    "error": net_err.public_message,
+                })
+            except ClientError as ce:
+                code = ce.response.get("Error", {}).get("Code", "AWS_CLIENT_ERROR")
+                msg = ce.response.get("Error", {}).get("Message", str(ce))
+                regional_failures.append({
+                    "region": r,
+                    "code": code,
+                    "error": f"[{code}] {msg}",
+                })
+            except TimeoutError:
+                regional_failures.append({
+                    "region": r,
+                    "code": "TimeoutError",
+                    "error": f"Security Group discovery timed out after {timeout_per_region}s for region {r}.",
+                })
+            except Exception as exc:
+                regional_failures.append({
+                    "region": r,
+                    "code": type(exc).__name__,
+                    "error": str(exc),
+                })
+
+    if (
+        len(regional_failures) == len(target_regions)
+        and all(f.get("code") in ("AWS_ACCESS_DENIED", "AccessDenied", "UnauthorizedOperation") for f in regional_failures)
+    ):
+        raise NetworkControlExecutionError(
+            status_code=403,
+            code="AWS_ACCESS_DENIED",
+            category="PERMISSION_DENIED",
+            message="AWS AccessDenied: The IAM role lacks ec2:DescribeSecurityGroups permission across all queried regions.",
+        )
+
+    all_sgs.sort(key=lambda x: (x.get("region", ""), x.get("group_id", "")))
+    coverage = "COMPLETE" if not regional_failures else "PARTIAL"
+
+    summary = {
+        "total_security_groups": len(all_sgs),
+        "critical_count": sum(1 for g in all_sgs if g.get("security_posture") == "CRITICAL"),
+        "high_risk_count": sum(1 for g in all_sgs if g.get("security_posture") == "HIGH_RISK"),
+        "risk_count": sum(1 for g in all_sgs if g.get("security_posture") == "RISK"),
+        "secure_count": sum(1 for g in all_sgs if g.get("security_posture") == "SECURE"),
+        "open_ssh_count": sum(1 for g in all_sgs if g.get("has_open_ssh")),
+        "open_rdp_count": sum(1 for g in all_sgs if g.get("has_open_rdp")),
+        "open_all_traffic_count": sum(1 for g in all_sgs if g.get("has_all_traffic_open")),
+        "regions": successful_regions,
+    }
+
+    return {
+        "security_groups": all_sgs,
+        "total_count": len(all_sgs),
+        "summary": summary,
+        "regions_searched": target_regions,
+        "successful_regions": successful_regions,
+        "regional_failures": regional_failures,
+        "coverage": coverage,
+        "retrieved_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
